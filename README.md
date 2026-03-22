@@ -2,10 +2,20 @@
 
 MCPR proxy with widget serving and built-in tunneling. One command to expose your local MCP server + widgets to ChatGPT/Claude via a public HTTPS URL.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nichochar/mcpr/main/scripts/install.sh | sh
+```
+
+Or build from source:
+```bash
+cargo install --path .
+```
+
 ## Quick Start
 
 ```bash
-cargo install --path .
 mcpr
 ```
 

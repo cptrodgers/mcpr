@@ -137,8 +137,7 @@ pub async fn serve_widget_html(state: &AppState, name: &str, raw: bool) -> Respo
 
     log_request(
         &state.tui_state,
-        LogEntry::new("GET", &format!("/widgets/{name}.html"), 200, "widget raw")
-            .size(html.len()),
+        LogEntry::new("GET", &format!("/widgets/{name}.html"), 200, "widget raw").size(html.len()),
     );
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -214,7 +213,7 @@ pub async fn discover_widget_names(state: &AppState) -> Vec<String> {
 
 // ── Studio (fully embedded SPA) ─────────────────────────
 
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 
 static STUDIO_DIR: Dir = include_dir!("static/studio");
 
@@ -411,5 +410,4 @@ mod tests {
         assert!(result.contains("https://proxy.example.com/app.js"));
         assert!(!result.contains("https://proxy.example.com//app.js"));
     }
-
 }

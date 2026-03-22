@@ -194,7 +194,11 @@ async fn health_check_loop(app_state: AppState) {
         } else {
             tui::ConnectionStatus::Connected
         };
-        let widget_count = if names.is_empty() { None } else { Some(names.len()) };
+        let widget_count = if names.is_empty() {
+            None
+        } else {
+            Some(names.len())
+        };
 
         {
             let mut s = app_state.tui_state.lock().unwrap();
