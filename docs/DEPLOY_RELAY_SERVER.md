@@ -105,27 +105,25 @@ mcpr --relay --port 8081 --relay-domain tunnel.yourdomain.com
 ### With Docker
 
 ```bash
-# Build
-docker build -t mcpr-relay .
-
-# Run
 docker run -d \
   --name mcpr-relay \
   --restart unless-stopped \
   -p 8081:8080 \
-  mcpr-relay
+  ghcr.io/cptrodgers/mcpr:latest \
+  --relay --port 8080 --relay-domain tunnel.yourdomain.com
 ```
 
 ### Update
 
 ```bash
-docker build -t mcpr-relay .
+docker pull ghcr.io/cptrodgers/mcpr:latest
 docker stop mcpr-relay && docker rm mcpr-relay
 docker run -d \
   --name mcpr-relay \
   --restart unless-stopped \
   -p 8081:8080 \
-  mcpr-relay
+  ghcr.io/cptrodgers/mcpr:latest \
+  --relay --port 8080 --relay-domain tunnel.yourdomain.com
 ```
 
 ## 5. Verify
