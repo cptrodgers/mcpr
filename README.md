@@ -30,7 +30,7 @@ Your machine                          AI client (ChatGPT / Claude)
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nichochar/mcpr/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/cptrodgets/mcpr/main/scripts/install.sh | sh
 ```
 
 Or build from source:
