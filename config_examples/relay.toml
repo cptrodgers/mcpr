@@ -1,0 +1,8 @@
+# Relay server mode — run mcpr as the tunnel relay
+# Start with: mcpr --relay
+
+# Port the relay server listens on
+port = 8080
+
+# Base domain for tunnel subdomains (e.g. <subdomain>.tunnel.usestudykit.com)
+relay_domain = "tunnel.usestudykit.com"

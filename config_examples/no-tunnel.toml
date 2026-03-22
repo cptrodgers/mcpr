@@ -1,0 +1,17 @@
+# Local-only mode — no tunnel, no relay
+# Access the proxy at http://localhost:<port>
+
+# Upstream MCP server
+mcp = "http://localhost:9000/mcp"
+
+# Widget source: URL (proxy mode) or path (static mode)
+widgets = "http://localhost:4444"
+
+# Local proxy port (required in no-tunnel mode)
+port = 3000
+
+# Disable tunnel
+no_tunnel = true
+
+# Extra CSP domains (for widgets loading external resources)
+# csp = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]

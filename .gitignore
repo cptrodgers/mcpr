@@ -1,0 +1,9 @@
+target/
+
+.env
+*.env
+
+.DS_Store
+
+node_modules
+mcpr.toml
