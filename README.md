@@ -56,9 +56,17 @@ mcpr --mcp http://localhost:9000 --widgets http://localhost:4444
 # → https://abc123.tunnel.example.com — paste in ChatGPT or Claude
 ```
 
+### Terminal UI
+
+Real-time request monitoring with connection status, widget discovery, and request logs.
+
+![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
+
 ### mcpr Studio
 
-Built-in widget debugger at `/studio/`. Preview widgets, inject mock `toolInput`/`toolOutput`, switch between OpenAI and Claude platform simulation, and inspect every action your widget fires — all without connecting to a real AI client.
+Built-in widget debugger at `/studio/`. Execute real MCP tools, preview widget rendering, switch between OpenAI and Claude platform simulation, and inspect every action your widget fires.
+
+![mcpr Studio](docs/images/mcpr-app-studio.png)
 
 See [docs/STUDIO.md](docs/STUDIO.md) for details.
 

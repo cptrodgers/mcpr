@@ -6,7 +6,7 @@ import { StudioLayout } from "./pages/studio-layout";
 
 const rootRoute = createRootRoute({
   component: () => (
-    <div className="dark min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground">
       <StudioLayout />
     </div>
   ),
