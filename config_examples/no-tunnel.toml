@@ -13,5 +13,6 @@ port = 3000
 # Disable tunnel
 no_tunnel = true
 
-# Extra CSP domains (for widgets loading external resources)
-# csp = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]
+# [csp]
+# mode = "extend"  # "extend" (default) or "override"
+# domains = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]

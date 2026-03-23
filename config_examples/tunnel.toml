@@ -19,5 +19,6 @@ relay_url = "https://tunnel.usestudykit.com"
 # Persistent tunnel identity (auto-saved on first run if omitted)
 # tunnel_token = "90c74def-8fdc-4922-8702-44bc5cabf830"
 
-# Extra CSP domains (for widgets loading external resources)
-# csp = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]
+# [csp]
+# mode = "extend"  # "extend" (default) or "override"
+# domains = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]
