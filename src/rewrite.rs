@@ -1,11 +1,14 @@
 use serde_json::Value;
 
+use crate::config::CspMode;
+
 #[derive(Clone)]
 pub struct RewriteConfig {
     pub proxy_url: String,
     pub proxy_domain: String,
     pub mcp_upstream: String,
     pub extra_csp_domains: Vec<String>,
+    pub csp_mode: CspMode,
 }
 
 /// Rewrite a JSON-RPC response based on the method.
@@ -118,7 +121,8 @@ fn inject_proxy_into_all_csp(value: &mut Value, config: &RewriteConfig) {
 }
 
 /// Rewrite a CSP domain array inside a parent object.
-/// Replaces any localhost/upstream URLs with proxy URL, keeps external domains, appends extras.
+/// - Extend mode: keep external domains from upstream, strip localhost/upstream, add extras + tunnel
+/// - Override mode: ignore upstream entirely, use only configured domains + tunnel domain
 fn rewrite_csp_object(parent: &mut Value, obj_key: &str, array_key: &str, config: &RewriteConfig) {
     let Some(obj) = parent.get_mut(obj_key) else {
         return;
@@ -127,29 +131,37 @@ fn rewrite_csp_object(parent: &mut Value, obj_key: &str, array_key: &str, config
         return;
     };
 
-    let upstream_domain = config
-        .mcp_upstream
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-
+    // Always start with proxy (tunnel) domain
     let mut new_domains: Vec<String> = vec![config.proxy_url.clone()];
 
-    for entry in arr.iter() {
-        if let Some(domain) = entry.as_str() {
-            // Skip domains that belong to the upstream or localhost widget server — we replace them
-            if domain.contains("localhost")
-                || domain.contains("127.0.0.1")
-                || domain.contains(upstream_domain)
-            {
-                continue;
+    match config.csp_mode {
+        CspMode::Extend => {
+            let upstream_domain = config
+                .mcp_upstream
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+
+            for entry in arr.iter() {
+                if let Some(domain) = entry.as_str() {
+                    // Skip localhost/upstream — we replace them with proxy
+                    if domain.contains("localhost")
+                        || domain.contains("127.0.0.1")
+                        || domain.contains(upstream_domain)
+                    {
+                        continue;
+                    }
+                    if !new_domains.contains(&domain.to_string()) {
+                        new_domains.push(domain.to_string());
+                    }
+                }
             }
-            if !new_domains.contains(&domain.to_string()) {
-                new_domains.push(domain.to_string());
-            }
+        }
+        CspMode::Override => {
+            // Ignore all upstream domains
         }
     }
 
-    // Append extra CSP domains
+    // Append extra CSP domains from config
     for extra in &config.extra_csp_domains {
         if !new_domains.contains(extra) {
             new_domains.push(extra.clone());
@@ -171,6 +183,7 @@ mod tests {
             proxy_domain: "abc.tunnel.example.com".into(),
             mcp_upstream: "http://localhost:9000".into(),
             extra_csp_domains: vec![],
+            csp_mode: CspMode::Extend,
         }
     }
 
@@ -545,5 +558,101 @@ mod tests {
             "should-stay.com"
         );
         assert_eq!(body["result"]["data"].as_str().unwrap(), "unchanged");
+    }
+
+    // ── Override mode ──
+
+    #[test]
+    fn override_mode_ignores_upstream_domains() {
+        let mut config = test_config();
+        config.csp_mode = CspMode::Override;
+        config.extra_csp_domains = vec!["https://allowed.example.com".into()];
+
+        let mut body = json!({
+            "result": {
+                "tools": [{
+                    "name": "test",
+                    "meta": {
+                        "openai/widgetCSP": {
+                            "resource_domains": [
+                                "https://cdn.external.com",
+                                "https://api.external.com",
+                                "http://localhost:4444"
+                            ],
+                            "connect_domains": [
+                                "https://api.external.com",
+                                "http://localhost:9000"
+                            ]
+                        }
+                    }
+                }]
+            }
+        });
+
+        rewrite_response("tools/list", &mut body, &config);
+
+        let resource: Vec<&str> =
+            body["result"]["tools"][0]["meta"]["openai/widgetCSP"]["resource_domains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+        // Only proxy + configured extras — no upstream domains
+        assert_eq!(
+            resource,
+            vec![
+                "https://abc.tunnel.example.com",
+                "https://allowed.example.com"
+            ]
+        );
+
+        let connect: Vec<&str> =
+            body["result"]["tools"][0]["meta"]["openai/widgetCSP"]["connect_domains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+        assert_eq!(
+            connect,
+            vec![
+                "https://abc.tunnel.example.com",
+                "https://allowed.example.com"
+            ]
+        );
+    }
+
+    #[test]
+    fn override_mode_claude_format() {
+        let mut config = test_config();
+        config.csp_mode = CspMode::Override;
+
+        let mut body = json!({
+            "result": {
+                "tools": [{
+                    "name": "test",
+                    "meta": {
+                        "ui": {
+                            "csp": {
+                                "connectDomains": ["https://api.external.com"],
+                                "resourceDomains": ["https://cdn.external.com"]
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+
+        rewrite_response("tools/list", &mut body, &config);
+
+        let connect: Vec<&str> = body["result"]["tools"][0]["meta"]["ui"]["csp"]["connectDomains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        // Override: only proxy domain, no upstream
+        assert_eq!(connect, vec!["https://abc.tunnel.example.com"]);
     }
 }

@@ -1,6 +1,15 @@
 # mcpr
 
-The proxy layer for MCP apps that serve widgets outside the MCP server. mcpr bundles your MCP backend and widget frontend into a single HTTPS endpoint — ready to test with ChatGPT, Claude, or any AI client.
+Proxy layer for MCP apps — from localhost to production. Tunnel, debug, deploy, and monitor your MCP server and widgets through one endpoint.
+
+```
+Local dev          →  PR/Branch testing     →  Production
+───────────────────────────────────────────────────────────
+tunnel + Studio       branch preview URLs      stable proxy
+CSP rewriting         test per PR              request tracking
+widget debugger       share with reviewers     performance monitoring
+                                               widget session replay
+```
 
 ## Install
 
@@ -38,6 +47,15 @@ AI clients enforce Content Security Policy on widgets — your MCP server has to
 
 mcpr handles this at the proxy layer. It rewrites CSP headers, widget domains, and OAuth discovery URLs automatically in MCP responses — for both OpenAI and Claude formats. Your MCP server stays environment-agnostic. Zero config changes, zero redeploys.
 
+### Instant tunnel with stable URLs
+
+One command gives you a public HTTPS endpoint. No ngrok, no port forwarding, no subscription. The URL stays the same across restarts — configure your AI client once, keep developing.
+
+```bash
+mcpr --mcp http://localhost:9000 --widgets http://localhost:4444
+# → https://abc123.tunnel.example.com — paste in ChatGPT or Claude
+```
+
 ### mcpr Studio
 
 Built-in widget debugger at `/studio/`. Preview widgets, inject mock `toolInput`/`toolOutput`, switch between OpenAI and Claude platform simulation, and inspect every action your widget fires — all without connecting to a real AI client.
@@ -46,24 +64,25 @@ See [docs/STUDIO.md](docs/STUDIO.md) for details.
 
 ## Use Cases
 
-### Instant test URL
+### Local development
 
-One command gives you a public HTTPS endpoint. Paste it into ChatGPT or Claude and start testing immediately — no deploy, no ngrok, no subscription.
+Develop your MCP server and widgets locally. mcpr tunnels both to a single HTTPS endpoint with auto CSP rewriting — test with ChatGPT or Claude instantly, iterate without deploying.
 
-```bash
-mcpr --mcp http://localhost:9000 --widgets http://localhost:4444
-# → https://abc123.tunnel.example.com — paste in ChatGPT, start building
-```
-
-The URL stays the same across restarts. Configure your AI client once, keep developing.
-
-### Unified widget + MCP endpoint
-
-MCP apps with widgets need both a protocol backend and a frontend served from the same origin. mcpr combines them into one tunneled HTTPS endpoint so AI clients can reach your tools, resources, and widgets through a single URL.
-
-### Widget debugger — no AI client needed
+### Widget debugging — no AI client needed
 
 mcpr Studio lets you develop and debug widgets entirely offline. Preview rendering, edit mock data as JSON, simulate both OpenAI and Claude platforms, and inspect every action — without waiting for a real AI model to call your tools.
+
+### PR and branch previews (coming soon)
+
+Spin up a preview endpoint per branch or pull request. Reviewers and QA can test your MCP app through ChatGPT or Claude without touching the main deployment.
+
+### Production proxy (coming soon)
+
+Deploy mcpr in front of your MCP app in production. Get request/response tracking, performance monitoring, and built-in OAuth integration — without changing your MCP server.
+
+### Widget session replay (coming soon)
+
+Like Sentry session replay, but for MCP widgets. mcpr captures request/response data and widget state in production — then lets you replay exactly what a user saw. Reproduce widget bugs with real data instead of guessing what went wrong.
 
 ## Quick Start
 
@@ -99,6 +118,7 @@ Options:
   --widgets <URL|PATH>     Widget source (URL = proxy, PATH = static serve)
   --port <PORT>            Local proxy port (required in local/relay mode, random in tunnel mode)
   --csp <DOMAIN>           Extra CSP domains (repeatable)
+  --csp-mode <MODE>        CSP mode: "extend" (default) or "override"
   --relay-url <URL>        Custom relay server (env: MCPR_RELAY_URL)
   --no-tunnel              Local-only, no tunnel
   --relay                  Run as relay server
@@ -144,11 +164,13 @@ See [docs/DEPLOY_RELAY_SERVER.md](docs/DEPLOY_RELAY_SERVER.md) for full relay se
 
 ## Roadmap
 
-- Request/response tracking and logging
-- Widget behavior replay
-- Performance monitoring
-- Configurable rewrite rules
-- Built-in OAuth integration
+- [ ] Request/response tracking and logging
+- [ ] Widget session replay (capture + reproduce widget behavior with real data)
+- [ ] Performance monitoring
+- [ ] Branch/PR preview endpoints
+- [ ] Configurable rewrite rules
+- [ ] Built-in OAuth integration
+- [ ] Production deployment mode
 
 ## Contributing
 

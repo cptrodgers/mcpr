@@ -121,6 +121,7 @@ async fn main() {
         proxy_domain,
         mcp_upstream: mcp.clone(),
         extra_csp_domains: cfg.csp_domains.clone(),
+        csp_mode: cfg.csp_mode,
     };
 
     let state = AppState {

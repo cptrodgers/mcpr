@@ -2,6 +2,25 @@ use clap::Parser;
 
 const CONFIG_FILE: &str = "mcpr.toml";
 
+/// CSP rewriting mode
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CspMode {
+    /// Keep external domains from upstream, strip localhost, add configured extras + tunnel domain
+    #[default]
+    Extend,
+    /// Ignore upstream CSP entirely, use only configured domains + tunnel domain
+    Override,
+}
+
+impl std::fmt::Display for CspMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CspMode::Extend => write!(f, "extend"),
+            CspMode::Override => write!(f, "override"),
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "mcpr", about = "MCP proxy with widget serving and tunnel")]
 pub struct Cli {
@@ -21,6 +40,10 @@ pub struct Cli {
     #[arg(long = "csp")]
     csp_domains: Vec<String>,
 
+    /// CSP mode: "extend" (add to upstream CSP) or "override" (replace upstream CSP)
+    #[arg(long = "csp-mode")]
+    csp_mode: Option<String>,
+
     /// Run as relay server instead of client proxy
     #[arg(long)]
     relay: bool,
@@ -38,6 +61,14 @@ pub struct Cli {
     no_tunnel: bool,
 }
 
+/// `[csp]` section in config file
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct FileCspConfig {
+    mode: Option<String>,
+    domains: Vec<String>,
+}
+
 /// Config file format (mcpr.toml)
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
@@ -45,12 +76,19 @@ struct FileConfig {
     mcp: Option<String>,
     widgets: Option<String>,
     port: Option<u16>,
-    csp: Vec<String>,
+    csp: FileCspConfig,
     relay_domain: Option<String>,
     relay_url: Option<String>,
     tunnel_token: Option<String>,
     tunnel_subdomain: Option<String>,
     no_tunnel: bool,
+}
+
+fn parse_csp_mode(s: &str) -> CspMode {
+    match s.to_lowercase().as_str() {
+        "override" => CspMode::Override,
+        _ => CspMode::Extend,
+    }
 }
 
 impl FileConfig {
@@ -93,6 +131,7 @@ pub struct ResolvedConfig {
     pub widgets: Option<String>,
     pub port: Option<u16>,
     pub csp_domains: Vec<String>,
+    pub csp_mode: CspMode,
     pub relay: bool,
     pub relay_domain: Option<String>,
     pub relay_url: Option<String>,
@@ -109,9 +148,17 @@ impl ResolvedConfig {
         let (file_config, config_path) = FileConfig::load();
 
         let csp_domains = if cli.csp_domains.is_empty() {
-            file_config.csp
+            file_config.csp.domains
         } else {
             cli.csp_domains
+        };
+
+        let csp_mode = if let Some(m) = &cli.csp_mode {
+            parse_csp_mode(m)
+        } else if let Some(m) = &file_config.csp.mode {
+            parse_csp_mode(m)
+        } else {
+            CspMode::default()
         };
 
         Self {
@@ -119,6 +166,7 @@ impl ResolvedConfig {
             widgets: cli.widgets.or(file_config.widgets),
             port: cli.port.or(file_config.port),
             csp_domains,
+            csp_mode,
             relay: cli.relay,
             relay_domain: cli.relay_domain.or(file_config.relay_domain),
             relay_url: cli.relay_url.or(file_config.relay_url),
