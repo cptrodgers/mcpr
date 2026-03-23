@@ -1,6 +1,6 @@
 # mcpr
 
-Proxy layer for MCP apps — from localhost to production. Tunnel, debug, deploy, and monitor your MCP server and widgets through one endpoint.
+Proxy layer for [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) (ChatGPT App SDK, Claude Customize) — from localhost to production. Tunnel, debug, deploy, and monitor your MCP server and widgets through one endpoint.
 
 ```
 Local dev          →  PR/Branch testing     →  Production
@@ -10,6 +10,8 @@ CSP rewriting         test per PR              request tracking
 widget debugger       share with reviewers     performance monitoring
                                                widget session replay
 ```
+
+![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
 
 ## Install
 
@@ -53,14 +55,8 @@ One command gives you a public HTTPS endpoint. No ngrok, no port forwarding, no 
 
 ```bash
 mcpr --mcp http://localhost:9000 --widgets http://localhost:4444
-# → https://abc123.tunnel.example.com — paste in ChatGPT or Claude
+# → https://abc123.tunnel.mcpr.app — paste in ChatGPT or Claude
 ```
-
-### Terminal UI
-
-Real-time request monitoring with connection status, widget discovery, and request logs.
-
-![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
 
 ### mcpr Studio
 
