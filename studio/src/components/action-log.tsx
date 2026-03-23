@@ -1,19 +1,9 @@
 import { useEffect, useRef } from "react";
+import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
-export interface ActionEntry {
-  time: string;
-  method: string;
-  args: string;
-}
-
-interface ActionLogProps {
-  actions: ActionEntry[];
-  onClear: () => void;
-}
-
-export function ActionLog({ actions, onClear }: ActionLogProps) {
+export function ActionLog() {
+  const { actions, clearActions } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -21,16 +11,16 @@ export function ActionLog({ actions, onClear }: ActionLogProps) {
   }, [actions]);
 
   return (
-    <div className="flex-[2] flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0">
       <div className="flex items-center justify-between px-3 py-1.5 bg-secondary/50 shrink-0">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Logs
         </span>
-        <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={onClear}>
+        <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={clearActions}>
           Clear
         </Button>
       </div>
-      <ScrollArea className="flex-1" ref={scrollRef}>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
         {actions.length === 0 ? (
           <p className="text-center text-muted-foreground text-xs py-6">
             Waiting for widget actions…
@@ -51,7 +41,7 @@ export function ActionLog({ actions, onClear }: ActionLogProps) {
             ))}
           </div>
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }
