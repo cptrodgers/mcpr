@@ -11,7 +11,7 @@ widgets = "http://localhost:4444"
 # port = 3000
 
 # Relay server URL
-relay_url = "https://tunnel.usestudykit.com"
+relay_url = "https://tunnel.mcpr.app"
 
 # Fixed subdomain (optional — derived from tunnel_token if omitted)
 # tunnel_subdomain = "03e48f685b45"
@@ -21,4 +21,4 @@ relay_url = "https://tunnel.usestudykit.com"
 
 # [csp]
 # mode = "extend"  # "extend" (default) or "override"
-# domains = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]
+# domains = ["https://media.mcpr.app", "https://api.dictionaryapi.dev"]

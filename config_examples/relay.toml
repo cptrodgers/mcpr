@@ -4,5 +4,5 @@
 # Port the relay server listens on
 port = 8080
 
-# Base domain for tunnel subdomains (e.g. <subdomain>.tunnel.usestudykit.com)
-relay_domain = "tunnel.usestudykit.com"
+# Base domain for tunnel subdomains (e.g. <subdomain>.tunnel.mcpr.app)
+relay_domain = "tunnel.mcpr.app"

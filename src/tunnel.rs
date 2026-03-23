@@ -192,7 +192,7 @@ async fn handle_tunnel_request(
     uri: axum::http::Uri,
     body: Bytes,
 ) -> Response {
-    // Extract subdomain from Host header: "abc123.tunnel.usestudykit.com" → "abc123"
+    // Extract subdomain from Host header: "abc123.tunnel.mcpr.app" → "abc123"
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())

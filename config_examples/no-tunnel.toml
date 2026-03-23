@@ -15,4 +15,4 @@ no_tunnel = true
 
 # [csp]
 # mode = "extend"  # "extend" (default) or "override"
-# domains = ["https://media.usestudykit.com", "https://api.dictionaryapi.dev"]
+# domains = ["https://media.mcpr.app", "https://api.dictionaryapi.dev"]
