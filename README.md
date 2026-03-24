@@ -1,15 +1,6 @@
 # mcpr
 
-Proxy layer for [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) (ChatGPT App SDK, Claude Customize) — from localhost to production. Tunnel, debug, deploy, and monitor your MCP server and widgets through one endpoint.
-
-```
-Local dev          →  PR/Branch testing     →  Production
-───────────────────────────────────────────────────────────
-tunnel + Studio       branch preview URLs      stable proxy
-CSP rewriting         test per PR              request tracking
-widget debugger       share with reviewers     performance monitoring
-                                               widget session replay
-```
+Proxy layer for [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) (ChatGPT App SDK, Claude Customize, etc) — from localhost to production. Tunnel, debug, deploy, and monitor your MCP App.
 
 ![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
 
@@ -19,78 +10,81 @@ widget debugger       share with reviewers     performance monitoring
 curl -fsSL https://raw.githubusercontent.com/cptrodgers/mcpr/main/scripts/install.sh | sh
 ```
 
-Or build from source:
-```bash
-cargo install --path .
-```
-
 ## Features
 
-### Single endpoint for MCP + widgets
+### MCP Tunnel
 
-Your MCP server and widget frontend run as separate processes. mcpr merges them behind one URL — `/mcp` routes to your backend, everything else serves your widgets. AI clients only need one endpoint.
+Expose your local MCP server to ChatGPT, Claude, or any AI client — one command, public HTTPS, no ngrok subscription.
 
-```
-Your machine                          AI client (ChatGPT / Claude)
-┌─────────────────┐
-│ MCP backend     │◄──┐
-│ (localhost:9000) │   │
-└─────────────────┘   │
-                      │   mcpr        tunnel
-┌─────────────────┐   ├──────────── ◄──────────── https://abc123.tunnel.example.com
-│ Widget frontend │◄──┘
-│ (localhost:4444) │
-└─────────────────┘
+```bash
+mcpr --mcp http://localhost:9000
+# → https://abc123.tunnel.mcpr.app
 ```
 
-### Auto CSP and domain rewriting
-
-AI clients enforce Content Security Policy on widgets — your MCP server has to return the right CSP domains, widget domains, and OAuth URLs for each environment. Without a proxy, you'd hardcode these per deployment or redeploy every time the domain changes.
-
-mcpr handles this at the proxy layer. It rewrites CSP headers, widget domains, and OAuth discovery URLs automatically in MCP responses — for both OpenAI and Claude formats. Your MCP server stays environment-agnostic. Zero config changes, zero redeploys.
-
-### Instant tunnel with stable URLs
-
-One command gives you a public HTTPS endpoint. No ngrok, no port forwarding, no subscription. The URL stays the same across restarts — configure your AI client once, keep developing.
+Running widgets too? mcpr merges both services behind a single URL — no need to pay for two ngrok endpoints. `/mcp` routes to your backend, everything else serves your widgets.
 
 ```bash
 mcpr --mcp http://localhost:9000 --widgets http://localhost:4444
-# → https://abc123.tunnel.mcpr.app — paste in ChatGPT or Claude
+# → https://abc123.tunnel.mcpr.app       (one URL, two services)
 ```
+
+```
+Your machine                           AI client (ChatGPT / Claude)
+┌─────────────────┐
+│ MCP server      │◄──┐
+│ :9000           │   │
+└─────────────────┘   │    mcpr         tunnel
+                      ├──────────── ◄──────────── https://abc123.tunnel.mcpr.app
+┌─────────────────┐   │
+│ Widgets         │◄──┘
+│ :4444           │
+└─────────────────┘
+```
+
+The URL stays the same across restarts — configure your AI client once, keep developing.
 
 ### mcpr Studio
 
-Built-in widget debugger at `/studio/`. Execute real MCP tools, preview widget rendering, switch between OpenAI and Claude platform simulation, and inspect every action your widget fires.
+Test your MCP tools and preview widgets locally — no AI model, no API key, no subscription. Studio simulates what ChatGPT and Claude do:
+
+- **Call tools** — execute your MCP tools with custom input and see raw responses
+- **Render & interact with widgets** — preview the returned UI and interact with it just like a user would on ChatGPT or Claude, testing the full widget flow end-to-end
+- **Inspect actions** — trace every action your widget fires back to the host
+- **Switch platforms** — toggle between OpenAI and Claude simulation modes
 
 ![mcpr Studio](docs/images/mcpr-app-studio.png)
 
-See [docs/STUDIO.md](docs/STUDIO.md) for details.
+### Edge Config
 
-## Use Cases
+Like Nginx or Caddy for your MCP app — move environment-specific config out of your application and into the proxy layer.
 
-### Local development
+AI clients require CSP headers, widget domains, and OAuth URLs tailored to each environment. Instead of hardcoding these in your MCP server, mcpr rewrites them at the edge — automatically, for both OpenAI and Claude formats.
 
-Develop your MCP server and widgets locally. mcpr tunnels both to a single HTTPS endpoint with auto CSP rewriting — test with ChatGPT or Claude instantly, iterate without deploying.
+- **CSP headers** — inject or extend Content Security Policy per environment
+- **Widget & OAuth domains** — rewrite URLs so your server stays environment-agnostic
+- **Zero redeploy** — change config at the proxy, not in your application
 
-### Widget debugging — no AI client needed
+## Getting Started
 
-mcpr Studio lets you develop and debug widgets entirely offline. Preview rendering, edit mock data as JSON, simulate both OpenAI and Claude platforms, and inspect every action — without waiting for a real AI model to call your tools.
+mcpr looks for `mcpr.toml` in the current directory (then parent dirs). CLI args override config values.
 
-### PR and branch previews (coming soon)
+### MCP server only
 
-Spin up a preview endpoint per branch or pull request. Reviewers and QA can test your MCP app through ChatGPT or Claude without touching the main deployment.
+Tunnel your MCP server — no widgets.
 
-### Production proxy (coming soon)
+```toml
+# mcpr.toml
+mcp = "http://localhost:9000"
+```
 
-Deploy mcpr in front of your MCP app in production. Get request/response tracking, performance monitoring, and built-in OAuth integration — without changing your MCP server.
+```bash
+mcpr
+# → https://abc123.tunnel.mcpr.app
+```
 
-### Widget session replay (coming soon)
+### MCP server + widgets
 
-Like Sentry session replay, but for MCP widgets. mcpr captures request/response data and widget state in production — then lets you replay exactly what a user saw. Reproduce widget bugs with real data instead of guessing what went wrong.
-
-## Quick Start
-
-**1. Create a config file:**
+Merge both services behind one URL.
 
 ```toml
 # mcpr.toml
@@ -98,19 +92,44 @@ mcp = "http://localhost:9000"
 widgets = "http://localhost:4444"
 ```
 
-**2. Run mcpr:**
+```bash
+mcpr
+# → https://abc123.tunnel.mcpr.app
+```
+
+On first run, mcpr generates a stable tunnel token and saves it to `mcpr.toml`. The URL stays the same across restarts.
+
+### Local only (no tunnel)
+
+For local clients like Claude Desktop, VS Code, or Cursor — no public URL needed.
+
+```toml
+# mcpr.toml
+mcp = "http://localhost:9000"
+no_tunnel = true
+port = 3000
+```
 
 ```bash
 mcpr
+# → http://localhost:3000/mcp
 ```
 
-On first run, mcpr generates a stable tunnel URL and saves the token to `mcpr.toml`. Paste the URL in ChatGPT or Claude — it stays the same across restarts.
+### Static widgets
 
-## Configuration
+Serve pre-built widgets from disk instead of proxying a dev server.
 
-mcpr looks for `mcpr.toml` in the current directory (then parent dirs). See [`config_examples/`](config_examples/) for ready-to-use templates.
+```toml
+# mcpr.toml
+mcp = "http://localhost:9000"
+widgets = "./widgets/dist"
+```
 
-Priority: **CLI args > environment variables > mcpr.toml > defaults**
+### Self-hosted relay
+
+Run your own tunnel relay instead of using `tunnel.mcpr.app`. This requires wildcard DNS, TLS termination (e.g. Cloudflare Tunnel, Caddy, or nginx + Let's Encrypt), and careful configuration.
+
+See [docs/DEPLOY_RELAY_SERVER.md](docs/DEPLOY_RELAY_SERVER.md) for the full guide before getting started.
 
 ## CLI
 
@@ -118,9 +137,9 @@ Priority: **CLI args > environment variables > mcpr.toml > defaults**
 mcpr [OPTIONS]
 
 Options:
-  --mcp <URL>              Upstream MCP server (required)
+  --mcp <URL>              Upstream MCP server
   --widgets <URL|PATH>     Widget source (URL = proxy, PATH = static serve)
-  --port <PORT>            Local proxy port (required in local/relay mode, random in tunnel mode)
+  --port <PORT>            Local proxy port
   --csp <DOMAIN>           Extra CSP domains (repeatable)
   --csp-mode <MODE>        CSP mode: "extend" (default) or "override"
   --relay-url <URL>        Custom relay server (env: MCPR_RELAY_URL)
@@ -129,52 +148,9 @@ Options:
   --relay-domain <DOMAIN>  Relay base domain (required in relay mode)
 ```
 
-## Modes
+Config priority: **CLI args > environment variables > mcpr.toml > defaults**
 
-**Tunnel** (default) — Connects to a relay, gets a public HTTPS URL. Token is auto-generated and saved for stable URLs across restarts.
-
-**Local-only** — No tunnel. For local clients (Claude Desktop, VS Code, Cursor):
-```bash
-mcpr --no-tunnel
-# Client connects to http://localhost:3000/mcp
-```
-
-**Static widgets** — Serve pre-built widgets from disk instead of proxying a dev server:
-```bash
-mcpr --widgets ./widgets/dist
-```
-
-**Relay** — Self-host your own tunnel relay. Requires wildcard DNS and TLS termination:
-```bash
-mcpr --relay --port 8080 --relay-domain tunnel.yourdomain.com
-```
-
-See [docs/DEPLOY_RELAY_SERVER.md](docs/DEPLOY_RELAY_SERVER.md) for full relay setup instructions.
-
-## Usage with AI Clients
-
-**ChatGPT**: Settings → Apps → Add app → paste your tunnel URL
-
-**claude.ai**: Customize connector.
-
-**Claude Desktop** (local):
-```json
-{
-  "mcpServers": {
-    "my-app": { "url": "http://localhost:3000/mcp" }
-  }
-}
-```
-
-## Roadmap
-
-- [ ] Request/response tracking and logging
-- [ ] Widget session replay (capture + reproduce widget behavior with real data)
-- [ ] Performance monitoring
-- [ ] Branch/PR preview endpoints
-- [ ] Configurable rewrite rules
-- [ ] Built-in OAuth integration
-- [ ] Production deployment mode
+See [`config_examples/`](config_examples/) for ready-to-use templates.
 
 ## Contributing
 
