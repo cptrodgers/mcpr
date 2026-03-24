@@ -13,8 +13,19 @@ import {
   type McpToolInfo,
   type McpResourceInfo,
 } from "./api";
-import { buildOpenAIMockScript, DEFAULT_MOCK, type MockData } from "./mock-openai";
+import {
+  buildOpenAIMockScript,
+  DEFAULT_MOCK,
+  type MockData,
+} from "./mock-openai";
 import { createClaudeMock } from "./mock-claude";
+import {
+  buildCspMetaTag,
+  extractCspDomains,
+  getProfile,
+  buildSandboxTrapScript,
+} from "./csp-profiles";
+import { analyzeHtml } from "./csp-checker";
 
 // ── Types ──
 
@@ -36,6 +47,29 @@ export interface PendingMessage {
   time: string;
   source: "openai" | "claude";
   content: unknown;
+}
+
+export interface CspViolation {
+  id: string;
+  time: string;
+  /** The directive that was violated (e.g. "script-src") */
+  directive: string;
+  /** The URI that was blocked */
+  blockedUri: string;
+  /** Source file where the violation occurred */
+  sourceFile: string;
+  /** Line number in source */
+  lineNumber: number;
+  /** Column number in source */
+  columnNumber: number;
+  /** Whether this came from runtime (browser) or static analysis */
+  source: "runtime" | "static";
+  /** Human-readable fix suggestion (for static issues) */
+  fix?: string;
+  /** Severity */
+  severity: "error" | "warning";
+  /** Which platforms are affected */
+  platforms?: string[];
 }
 
 // ── Helpers ──
@@ -77,7 +111,8 @@ function sampleValue(key: string, prop: JsonSchemaProperty): unknown {
   if (prop.format === "date") return "2026-01-15";
   if (prop.format === "date-time") return "2026-01-15T10:30:00Z";
   if (prop.format === "email") return "user@example.com";
-  if (prop.format === "uri" || prop.format === "url") return "https://example.com";
+  if (prop.format === "uri" || prop.format === "url")
+    return "https://example.com";
   if (prop.format === "uuid") return "550e8400-e29b-41d4-a716-446655440000";
 
   if (prop.type === "string") {
@@ -87,8 +122,10 @@ function sampleValue(key: string, prop: JsonSchemaProperty): unknown {
     if (k.includes("email")) return "user@example.com";
     if (k.includes("url") || k.includes("uri")) return "https://example.com";
     if (k.includes("lang") || k.includes("locale")) return "en-US";
-    if (k.includes("query") || k.includes("search") || k.includes("question")) return "sample query";
-    if (k.includes("message") || k.includes("text") || k.includes("content")) return "Hello world";
+    if (k.includes("query") || k.includes("search") || k.includes("question"))
+      return "sample query";
+    if (k.includes("message") || k.includes("text") || k.includes("content"))
+      return "Hello world";
     if (k.includes("description")) return "A sample description";
     if (k.includes("title")) return "Sample Title";
     if (prop.description) return `<${prop.description.slice(0, 30)}>`;
@@ -105,7 +142,8 @@ function sampleValue(key: string, prop: JsonSchemaProperty): unknown {
     return [];
   }
   if (prop.type === "object") {
-    if (prop.properties) return sampleFromProperties(prop.properties, prop.required);
+    if (prop.properties)
+      return sampleFromProperties(prop.properties, prop.required);
     return {};
   }
   return null;
@@ -144,7 +182,9 @@ function extractWidgetUri(meta: Record<string, unknown>): string | null {
   // Claude: meta.ui.resourceUri
   const ui = meta.ui as Record<string, unknown> | undefined;
   if (ui?.resourceUri && typeof ui.resourceUri === "string") {
-    const m = (ui.resourceUri as string).match(/^ui:\/\/widget\/(.+?)(?:\.html)?$/);
+    const m = (ui.resourceUri as string).match(
+      /^ui:\/\/widget\/(.+?)(?:\.html)?$/
+    );
     if (m) return m[1];
   }
   // Also check ui.uri (from tools/list meta)
@@ -163,7 +203,11 @@ function extractWidgetUri(meta: Record<string, unknown>): string | null {
 
 function formatTimestamp(): string {
   const now = new Date();
-  return now.toTimeString().split(" ")[0] + "." + String(now.getMilliseconds()).padStart(3, "0");
+  return (
+    now.toTimeString().split(" ")[0] +
+    "." +
+    String(now.getMilliseconds()).padStart(3, "0")
+  );
 }
 
 // ── Store ──
@@ -200,6 +244,10 @@ interface StudioState {
   actions: ActionEntry[];
   pendingMessages: PendingMessage[];
 
+  // CSP / Strict mode
+  strictMode: boolean;
+  cspViolations: CspViolation[];
+
   // Iframe refs (set by component)
   _iframeRef: HTMLIFrameElement | null;
   _claudeMock: ReturnType<typeof createClaudeMock> | null;
@@ -222,6 +270,9 @@ interface StudioState {
   dismissMessage: (id: string) => void;
   clearMessages: () => void;
   setIframeRef: (el: HTMLIFrameElement | null) => void;
+  setStrictMode: (on: boolean) => void;
+  addCspViolation: (v: CspViolation) => void;
+  clearCspViolations: () => void;
 
   // Widget rendering
   resolveWidgetName: (responseMeta?: Record<string, unknown>) => string | null;
@@ -264,6 +315,10 @@ export const useStore = create<StudioState>((set, get) => ({
   actions: [],
   pendingMessages: [],
 
+  // CSP / Strict mode
+  strictMode: false,
+  cspViolations: [],
+
   // Refs
   _iframeRef: null,
   _claudeMock: null,
@@ -285,7 +340,7 @@ export const useStore = create<StudioState>((set, get) => ({
 
     const mcpError =
       results[1].status === "rejected" && results[2].status === "rejected"
-        ? (results[1].reason?.message || "MCP request failed")
+        ? results[1].reason?.message || "MCP request failed"
         : null;
 
     if (mcpError) set({ authOpen: true });
@@ -293,7 +348,9 @@ export const useStore = create<StudioState>((set, get) => ({
     set({
       widgets: w,
       tools: t.sort((a, b) => a.name.localeCompare(b.name)),
-      resources: r.sort((a, b) => (a.name || a.uri).localeCompare(b.name || b.uri)),
+      resources: r.sort((a, b) =>
+        (a.name || a.uri).localeCompare(b.name || b.uri)
+      ),
       loading: false,
       mcpError,
     });
@@ -327,7 +384,14 @@ export const useStore = create<StudioState>((set, get) => ({
   select: (item) => {
     // Destroy previous claude mock
     get()._claudeMock?.destroy();
-    set({ selected: item, actions: [], pendingMessages: [], jsonOutput: null, lastResult: null, _claudeMock: null });
+    set({
+      selected: item,
+      actions: [],
+      pendingMessages: [],
+      jsonOutput: null,
+      lastResult: null,
+      _claudeMock: null,
+    });
 
     // Set editor value based on selection type
     if (item.type === "widget") {
@@ -367,7 +431,10 @@ export const useStore = create<StudioState>((set, get) => ({
   logAction: (method, args) => {
     const argsStr = typeof args === "string" ? args : JSON.stringify(args);
     set((s) => ({
-      actions: [...s.actions, { time: formatTimestamp(), method, args: argsStr }],
+      actions: [
+        ...s.actions,
+        { time: formatTimestamp(), method, args: argsStr },
+      ],
     }));
   },
 
@@ -384,12 +451,34 @@ export const useStore = create<StudioState>((set, get) => ({
   },
 
   dismissMessage: (id) => {
-    set((s) => ({ pendingMessages: s.pendingMessages.filter((m) => m.id !== id) }));
+    set((s) => ({
+      pendingMessages: s.pendingMessages.filter((m) => m.id !== id),
+    }));
   },
 
   clearMessages: () => set({ pendingMessages: [] }),
 
   setIframeRef: (el) => set({ _iframeRef: el }),
+
+  setStrictMode: (on) => {
+    set({ strictMode: on, cspViolations: [] });
+    setTimeout(() => get().loadWidget(), 50);
+  },
+
+  addCspViolation: (v) => {
+    set((s) => {
+      // Deduplicate by directive + blockedUri
+      const isDupe = s.cspViolations.some(
+        (existing) =>
+          existing.directive === v.directive &&
+          existing.blockedUri === v.blockedUri
+      );
+      if (isDupe) return s;
+      return { cspViolations: [...s.cspViolations, v] };
+    });
+  },
+
+  clearCspViolations: () => set({ cspViolations: [] }),
 
   // ── Widget name resolution ──
 
@@ -408,7 +497,9 @@ export const useStore = create<StudioState>((set, get) => ({
 
     // 3. Resource → parse URI
     if (selected.type === "resource") {
-      const m = selected.resource.uri.match(/^ui:\/\/widget\/(.+?)(?:\.html)?$/);
+      const m = selected.resource.uri.match(
+        /^ui:\/\/widget\/(.+?)(?:\.html)?$/
+      );
       return m ? m[1] : null;
     }
 
@@ -428,8 +519,12 @@ export const useStore = create<StudioState>((set, get) => ({
 
       for (const w of knownNames) {
         if (toolName.includes(w) || w.includes(toolName)) return w;
-        const stripped = toolName.replace(/^(create|get|list|update|add|delete|remove|submit|review)_/, "");
-        if (w === stripped || w.includes(stripped) || stripped.includes(w)) return w;
+        const stripped = toolName.replace(
+          /^(create|get|list|update|add|delete|remove|submit|review)_/,
+          ""
+        );
+        if (w === stripped || w.includes(stripped) || stripped.includes(w))
+          return w;
       }
     }
 
@@ -439,13 +534,19 @@ export const useStore = create<StudioState>((set, get) => ({
   // ── Widget rendering ──
 
   renderWidget: async (mock, overrideWidgetName) => {
-    const { _iframeRef: iframe, platform, logAction } = get();
+    const {
+      _iframeRef: iframe,
+      platform,
+      strictMode,
+      logAction,
+      addCspViolation,
+    } = get();
     const name = overrideWidgetName || get().resolveWidgetName();
     if (!name || !iframe) return;
 
     // Cleanup previous claude mock
     get()._claudeMock?.destroy();
-    set({ _claudeMock: null });
+    set({ _claudeMock: null, cspViolations: [] });
 
     // Both platforms embed HTML via srcdoc (not iframe.src), matching how
     // ChatGPT and Claude actually host widgets in production.
@@ -457,26 +558,78 @@ export const useStore = create<StudioState>((set, get) => ({
     const baseUrl = getBaseUrl();
     html = html.replace(/https?:\/\/[a-z0-9]+\.tunnel\.mcpr\.app/gi, baseUrl);
 
+    // Extract CSP domains from mock metadata
+    const meta = (mock._meta || {}) as Record<string, unknown>;
+    const cspDomains = extractCspDomains(meta);
+
+    // Run static analysis (always, regardless of strict mode)
+    const widgetSource = `/widgets/${name}.html`;
+    const staticIssues = analyzeHtml(html, cspDomains);
+    for (const issue of staticIssues) {
+      addCspViolation({
+        id: `static_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        time: new Date().toTimeString().split(" ")[0],
+        directive: issue.directive,
+        blockedUri: issue.blocked,
+        sourceFile: widgetSource,
+        lineNumber: issue.line || 0,
+        columnNumber: 0,
+        source: "static",
+        fix: issue.fix,
+        severity: issue.severity,
+        platforms: issue.platforms,
+      });
+    }
+
+    // Strict mode: inject CSP meta tag and tighten sandbox
+    if (strictMode) {
+      const cspTag = buildCspMetaTag(platform, cspDomains);
+      html = html.replace(/<head([^>]*)>/i, `<head$1>${cspTag}`);
+      const profile = getProfile(platform);
+      iframe.sandbox.value = profile.sandbox;
+
+      // Inject sandbox trap for both platforms — detects access to storage,
+      // geolocation, camera/mic, notifications, service workers, clipboard,
+      // device APIs, and other restricted APIs at runtime
+      const trap = buildSandboxTrapScript();
+      html = html.replace(/<head([^>]*)>/i, `<head$1>${trap}`);
+
+      logAction("system", `Strict mode: CSP enforced (${platform} profile)`);
+    } else {
+      iframe.sandbox.value =
+        "allow-scripts allow-same-origin allow-popups allow-forms";
+    }
+
     if (platform === "openai") {
       const mockScript = buildOpenAIMockScript(mock);
       const injected = html.replace(/<head([^>]*)>/i, `<head$1>${mockScript}`);
       iframe.srcdoc = injected;
     } else {
-      const onToolCall = async (name: string, args: Record<string, unknown>) => {
+      const onToolCall = async (
+        name: string,
+        args: Record<string, unknown>
+      ) => {
         logAction("system", `Calling tool "${name}"…`);
         return callTool(name, args);
       };
       const onMessage = (content: unknown) => {
         get().addPendingMessage("claude", content);
       };
-      const claudeMock = createClaudeMock(iframe, mock, logAction, onToolCall, onMessage);
+      const claudeMock = createClaudeMock(
+        iframe,
+        mock,
+        logAction,
+        onToolCall,
+        onMessage
+      );
       set({ _claudeMock: claudeMock });
       iframe.srcdoc = html;
     }
   },
 
   loadWidget: async () => {
-    const { editorValue, theme, locale, displayMode, logAction, renderWidget } = get();
+    const { editorValue, theme, locale, displayMode, logAction, renderWidget } =
+      get();
     try {
       const parsed = JSON.parse(editorValue);
       const mock: MockData = {
@@ -495,7 +648,17 @@ export const useStore = create<StudioState>((set, get) => ({
   },
 
   applyMock: () => {
-    const { _iframeRef: iframe, platform, editorValue, theme, locale, displayMode, logAction, renderWidget, resolveWidgetName } = get();
+    const {
+      _iframeRef: iframe,
+      platform,
+      editorValue,
+      theme,
+      locale,
+      displayMode,
+      logAction,
+      renderWidget,
+      resolveWidgetName,
+    } = get();
     if (!resolveWidgetName()) return;
 
     try {
@@ -515,7 +678,9 @@ export const useStore = create<StudioState>((set, get) => ({
         try {
           const win = iframe.contentWindow;
           if (win && (win as unknown as { openai: unknown }).openai) {
-            const openai = (win as unknown as { openai: Record<string, unknown> }).openai;
+            const openai = (
+              win as unknown as { openai: Record<string, unknown> }
+            ).openai;
             openai.toolInput = mock.toolInput;
             openai.toolOutput = mock.toolOutput;
             openai.toolResponseMetadata = mock._meta;
@@ -527,7 +692,9 @@ export const useStore = create<StudioState>((set, get) => ({
             logAction("system", "Mock data applied");
             return;
           }
-        } catch { /* fall through to full reload */ }
+        } catch {
+          /* fall through to full reload */
+        }
       }
 
       if (platform === "claude") {
@@ -552,7 +719,9 @@ export const useStore = create<StudioState>((set, get) => ({
     } else if (selected.type === "tool") {
       set({ editorValue: toolArgsFromSchema(selected.tool.inputSchema) });
     } else if (selected.type === "resource") {
-      set({ editorValue: JSON.stringify({ uri: selected.resource.uri }, null, 2) });
+      set({
+        editorValue: JSON.stringify({ uri: selected.resource.uri }, null, 2),
+      });
     }
     setTimeout(loadWidget, 50);
   },
@@ -560,7 +729,16 @@ export const useStore = create<StudioState>((set, get) => ({
   // ── Execute ──
 
   execute: async () => {
-    const { selected, editorValue, theme, locale, displayMode, logAction, renderWidget, resolveWidgetName } = get();
+    const {
+      selected,
+      editorValue,
+      theme,
+      locale,
+      displayMode,
+      logAction,
+      renderWidget,
+      resolveWidgetName,
+    } = get();
     if (!selected) return;
     set({ executing: true });
     logAction("system", `Executing ${selected.type}…`);
@@ -581,14 +759,21 @@ export const useStore = create<StudioState>((set, get) => ({
       }
 
       // Extract tool output
-      const content = result as { content?: Array<{ type: string; text?: string }>; meta?: Record<string, unknown> };
+      const content = result as {
+        content?: Array<{ type: string; text?: string }>;
+        meta?: Record<string, unknown>;
+      };
       let toolOutput: unknown = result;
       const meta = content.meta || {};
 
       if (content.content) {
         const textContent = content.content.find((c) => c.type === "text");
         if (textContent?.text) {
-          try { toolOutput = JSON.parse(textContent.text); } catch { toolOutput = textContent.text; }
+          try {
+            toolOutput = JSON.parse(textContent.text);
+          } catch {
+            toolOutput = textContent.text;
+          }
         }
       }
 
@@ -610,7 +795,10 @@ export const useStore = create<StudioState>((set, get) => ({
         set({ jsonOutput: null });
         const mock: MockData = { ...mockData, theme, locale, displayMode };
         await renderWidget(mock, widgetName);
-        logAction("system", `Widget "${widgetName}" rendered with real tool response`);
+        logAction(
+          "system",
+          `Widget "${widgetName}" rendered with real tool response`
+        );
       } else {
         set({ jsonOutput: JSON.stringify(result, null, 2) });
         logAction("system", "No widget — showing JSON response");

@@ -9,7 +9,9 @@ function LogEntry({ entry, index }: { entry: ActionEntry; index: number }) {
 
   const copyToClipboard = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(`${entry.time} ${entry.method} ${entry.args}`);
+    navigator.clipboard.writeText(
+      `${entry.time} ${entry.method} ${entry.args}`
+    );
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -61,7 +63,12 @@ export function ActionLog() {
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Logs
         </span>
-        <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={clearActions}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 text-xs px-2"
+          onClick={clearActions}
+        >
           Clear
         </Button>
       </div>
