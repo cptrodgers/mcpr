@@ -1,6 +1,7 @@
 import { useStore } from "@/lib/store";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Platform } from "@/lib/store";
+import type { Platform, ViewportPreset } from "@/lib/store";
+import { VIEWPORT_PRESETS } from "@/lib/store";
 
 export function WidgetConfig() {
   const {
@@ -10,11 +11,15 @@ export function WidgetConfig() {
     locale,
     strictMode,
     cspViolations,
+    viewportPreset,
+    viewportCustom,
     setPlatform,
     setTheme,
     setDisplayMode,
     setLocale,
     setStrictMode,
+    setViewportPreset,
+    setViewportCustom,
   } = useStore();
 
   const errorCount = cspViolations.filter((v) => v.severity === "error").length;
@@ -87,6 +92,60 @@ export function WidgetConfig() {
         onChange={(e) => setLocale(e.target.value)}
         className="bg-secondary text-secondary-foreground rounded px-2 py-1 text-xs w-14 border-0"
       />
+
+      <div className="w-px h-4 bg-border" />
+
+      <label className="text-muted-foreground">Viewport</label>
+      <select
+        value={viewportPreset}
+        onChange={(e) => setViewportPreset(e.target.value as ViewportPreset)}
+        className="bg-secondary text-secondary-foreground rounded px-2 py-1 text-xs border-0"
+      >
+        {Object.entries(VIEWPORT_PRESETS).map(([key, size]) => (
+          <option key={key} value={key}>
+            {key.charAt(0).toUpperCase() + key.slice(1)} ({size.width}x
+            {size.height})
+          </option>
+        ))}
+        <option value="custom">Custom</option>
+      </select>
+      {viewportPreset === "custom" && (
+        <>
+          <input
+            type="number"
+            min={100}
+            max={2560}
+            value={viewportCustom.width}
+            onChange={(e) =>
+              setViewportCustom({
+                width: Math.min(
+                  2560,
+                  Math.max(100, Number(e.target.value) || 100)
+                ),
+              })
+            }
+            className="bg-secondary text-secondary-foreground rounded px-2 py-1 text-xs w-16 border-0"
+            title="Width (px)"
+          />
+          <span className="text-muted-foreground">x</span>
+          <input
+            type="number"
+            min={100}
+            max={2560}
+            value={viewportCustom.height}
+            onChange={(e) =>
+              setViewportCustom({
+                height: Math.min(
+                  2560,
+                  Math.max(100, Number(e.target.value) || 100)
+                ),
+              })
+            }
+            className="bg-secondary text-secondary-foreground rounded px-2 py-1 text-xs w-16 border-0"
+            title="Height (px)"
+          />
+        </>
+      )}
     </div>
   );
 }
