@@ -2,6 +2,7 @@ import { useStore } from "@/lib/store";
 import { Sidebar } from "@/components/sidebar";
 import { RequestEditor } from "@/components/request-editor";
 import { ActionLog } from "@/components/action-log";
+import { PendingMessages } from "@/components/pending-messages";
 import { WidgetConfig } from "@/components/widget-config";
 import { WidgetPreview } from "@/components/widget-preview";
 import { ResizableSplit } from "@/components/resizable-split";
@@ -45,7 +46,12 @@ export function StudioLayout() {
         </div>
         <ResizableSplit
           top={<RequestEditor />}
-          bottom={<ActionLog />}
+          bottom={
+            <div className="flex-1 flex flex-col min-h-0">
+              <PendingMessages />
+              <ActionLog />
+            </div>
+          }
           defaultRatio={0.6}
           minTopPx={120}
           minBottomPx={80}

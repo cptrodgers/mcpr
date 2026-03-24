@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
+import { callTool } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Tab = "widget" | "json";
 
 export function WidgetPreview() {
-  const { jsonOutput, lastResult, resolveWidgetName, setIframeRef, logAction } = useStore();
+  const { jsonOutput, lastResult, resolveWidgetName, setIframeRef, logAction, addPendingMessage } = useStore();
   const widgetName = resolveWidgetName();
   const [activeTab, setActiveTab] = useState<Tab>("widget");
 
@@ -31,11 +32,36 @@ export function WidgetPreview() {
       }
       if (data.type === "mcpr_action") {
         logAction(data.method, data.args);
+
+        // Actually call backend MCP server for callTool actions (OpenAI path)
+        if (data.method === "callTool" && data.args?.name && data.callId) {
+          const iframe = useStore.getState()._iframeRef;
+          callTool(data.args.name, data.args.arguments || {})
+            .then((result) => {
+              logAction("callTool:result", { name: data.args.name, result });
+              iframe?.contentWindow?.postMessage(
+                { type: "mcpr_tool_result", callId: data.callId, result },
+                "*"
+              );
+            })
+            .catch((err) => {
+              logAction("callTool:error", { name: data.args.name, error: (err as Error).message });
+              iframe?.contentWindow?.postMessage(
+                { type: "mcpr_tool_result", callId: data.callId, result: { error: (err as Error).message } },
+                "*"
+              );
+            });
+        }
+
+        // Capture follow-up messages from widget (OpenAI path)
+        if (data.method === "sendFollowUpMessage") {
+          addPendingMessage("openai", data.args);
+        }
       }
     }
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [logAction]);
+  }, [logAction, addPendingMessage]);
 
   // Auto-resize fallback
   useEffect(() => {
@@ -75,8 +101,8 @@ export function WidgetPreview() {
             JSON Response
           </span>
         </div>
-        <ScrollArea className="flex-1">
-          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground">{jsonText}</pre>
+        <ScrollArea className="flex-1 min-h-0">
+          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground select-text">{jsonText}</pre>
         </ScrollArea>
       </div>
     );
@@ -128,8 +154,8 @@ export function WidgetPreview() {
 
       {/* JSON view */}
       {showTabs && activeTab === "json" && (
-        <ScrollArea className="flex-1">
-          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground">{jsonText}</pre>
+        <ScrollArea className="flex-1 min-h-0">
+          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground select-text">{jsonText}</pre>
         </ScrollArea>
       )}
     </div>

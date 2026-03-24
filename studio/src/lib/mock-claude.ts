@@ -7,9 +7,17 @@ import type { MockData } from "./mock-openai";
 export function createClaudeMock(
   iframe: HTMLIFrameElement,
   mock: MockData,
-  onAction: (method: string, args: unknown) => void
+  onAction: (method: string, args: unknown) => void,
+  onToolCall?: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+  onMessage?: (content: unknown) => void
 ) {
   let currentMock = { ...mock };
+
+  // Claude only accepts "inline" | "fullscreen" | "pip" as displayMode
+  function toClaudeDisplayMode(mode: string): string {
+    if (mode === "fullscreen" || mode === "pip") return mode;
+    return "inline"; // "compact" and others map to "inline"
+  }
 
   function sendResponse(id: string | number, result: unknown) {
     iframe.contentWindow?.postMessage({ jsonrpc: "2.0", id, result }, "*");
@@ -22,7 +30,7 @@ export function createClaudeMock(
   function sendToolData() {
     sendNotification("ui/notifications/host-context-changed", {
       theme: currentMock.theme,
-      displayMode: currentMock.displayMode,
+      displayMode: toClaudeDisplayMode(currentMock.displayMode),
       locale: currentMock.locale,
       availableDisplayModes: ["inline", "fullscreen"],
     });
@@ -72,7 +80,7 @@ export function createClaudeMock(
             },
             hostContext: {
               theme: currentMock.theme,
-              displayMode: currentMock.displayMode,
+              displayMode: toClaudeDisplayMode(currentMock.displayMode),
               locale: currentMock.locale,
               availableDisplayModes: ["inline", "fullscreen"],
             },
@@ -83,15 +91,42 @@ export function createClaudeMock(
 
         case "ui/message":
           onAction("sendMessage", params);
+          if (onMessage) onMessage(params);
           sendResponse(id, {});
           break;
 
         case "ui/call-server-tool":
         case "ui/callServerTool":
+        case "tools/call":
           onAction("callServerTool", params);
-          sendResponse(id, {
-            content: [{ type: "text", text: "{}" }],
-          });
+          if (onToolCall) {
+            const toolParams = params as { name?: string; arguments?: Record<string, unknown> };
+            const toolName = toolParams.name || "";
+            const toolArgs = toolParams.arguments || {};
+            onToolCall(toolName, toolArgs)
+              .then((result) => {
+                const content = result as { content?: Array<{ type: string; text?: string }>; meta?: Record<string, unknown> };
+                if (content.content) {
+                  sendResponse(id, { content: content.content });
+                } else {
+                  sendResponse(id, {
+                    content: [{ type: "text", text: JSON.stringify(result) }],
+                  });
+                }
+                onAction("callServerTool:result", { name: toolName, result });
+              })
+              .catch((err) => {
+                sendResponse(id, {
+                  content: [{ type: "text", text: JSON.stringify({ error: (err as Error).message }) }],
+                  isError: true,
+                });
+                onAction("callServerTool:error", { name: toolName, error: (err as Error).message });
+              });
+          } else {
+            sendResponse(id, {
+              content: [{ type: "text", text: "{}" }],
+            });
+          }
           break;
 
         case "ui/update-model-context":

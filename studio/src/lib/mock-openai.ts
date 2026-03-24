@@ -20,9 +20,16 @@ window.openai = {
     return Promise.resolve();
   },
   callTool: function(name, args) {
-    window.parent.postMessage({ type: 'mcpr_action', method: 'callTool', args: { name: name, arguments: args } }, '*');
+    var callId = '__mcpr_call_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    window.parent.postMessage({ type: 'mcpr_action', method: 'callTool', args: { name: name, arguments: args }, callId: callId }, '*');
     return new Promise(function(resolve) {
-      window.__mcpr_pending_tool = resolve;
+      function handler(event) {
+        if (event.data && event.data.type === 'mcpr_tool_result' && event.data.callId === callId) {
+          window.removeEventListener('message', handler);
+          resolve(event.data.result);
+        }
+      }
+      window.addEventListener('message', handler);
     });
   },
   setWidgetState: function(state) {

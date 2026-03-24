@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   fetchWidgets,
+  getBaseUrl,
   getAuthToken,
   setAuthToken as persistAuthToken,
   listTools,
@@ -28,6 +29,13 @@ export interface ActionEntry {
   time: string;
   method: string;
   args: string;
+}
+
+export interface PendingMessage {
+  id: string;
+  time: string;
+  source: "openai" | "claude";
+  content: unknown;
 }
 
 // ── Helpers ──
@@ -190,6 +198,7 @@ interface StudioState {
   jsonOutput: string | null;
   lastResult: unknown | null;
   actions: ActionEntry[];
+  pendingMessages: PendingMessage[];
 
   // Iframe refs (set by component)
   _iframeRef: HTMLIFrameElement | null;
@@ -209,6 +218,9 @@ interface StudioState {
   setDisplayMode: (d: string) => void;
   logAction: (method: string, args: unknown) => void;
   clearActions: () => void;
+  addPendingMessage: (source: "openai" | "claude", content: unknown) => void;
+  dismissMessage: (id: string) => void;
+  clearMessages: () => void;
   setIframeRef: (el: HTMLIFrameElement | null) => void;
 
   // Widget rendering
@@ -250,6 +262,7 @@ export const useStore = create<StudioState>((set, get) => ({
   jsonOutput: null,
   lastResult: null,
   actions: [],
+  pendingMessages: [],
 
   // Refs
   _iframeRef: null,
@@ -314,7 +327,7 @@ export const useStore = create<StudioState>((set, get) => ({
   select: (item) => {
     // Destroy previous claude mock
     get()._claudeMock?.destroy();
-    set({ selected: item, actions: [], jsonOutput: null, lastResult: null, _claudeMock: null });
+    set({ selected: item, actions: [], pendingMessages: [], jsonOutput: null, lastResult: null, _claudeMock: null });
 
     // Set editor value based on selection type
     if (item.type === "widget") {
@@ -359,6 +372,22 @@ export const useStore = create<StudioState>((set, get) => ({
   },
 
   clearActions: () => set({ actions: [] }),
+
+  addPendingMessage: (source, content) => {
+    const msg: PendingMessage = {
+      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      time: formatTimestamp(),
+      source,
+      content,
+    };
+    set((s) => ({ pendingMessages: [...s.pendingMessages, msg] }));
+  },
+
+  dismissMessage: (id) => {
+    set((s) => ({ pendingMessages: s.pendingMessages.filter((m) => m.id !== id) }));
+  },
+
+  clearMessages: () => set({ pendingMessages: [] }),
 
   setIframeRef: (el) => set({ _iframeRef: el }),
 
@@ -418,17 +447,31 @@ export const useStore = create<StudioState>((set, get) => ({
     get()._claudeMock?.destroy();
     set({ _claudeMock: null });
 
+    // Both platforms embed HTML via srcdoc (not iframe.src), matching how
+    // ChatGPT and Claude actually host widgets in production.
+    const resp = await fetch(getRawWidgetUrl(name));
+    let html = await resp.text();
+    // The backend rewrites asset URLs to the tunnel domain (e.g. https://xxx.tunnel.mcpr.app/assets/...).
+    // For srcdoc, the iframe origin is localhost, so those cross-origin requests fail (CORS).
+    // Rewrite them back to the local proxy which can serve the same assets without CORS issues.
+    const baseUrl = getBaseUrl();
+    html = html.replace(/https?:\/\/[a-z0-9]+\.tunnel\.mcpr\.app/gi, baseUrl);
+
     if (platform === "openai") {
-      const resp = await fetch(getRawWidgetUrl(name));
-      const html = await resp.text();
       const mockScript = buildOpenAIMockScript(mock);
       const injected = html.replace(/<head([^>]*)>/i, `<head$1>${mockScript}`);
       iframe.srcdoc = injected;
     } else {
-      const claudeMock = createClaudeMock(iframe, mock, logAction);
+      const onToolCall = async (name: string, args: Record<string, unknown>) => {
+        logAction("system", `Calling tool "${name}"…`);
+        return callTool(name, args);
+      };
+      const onMessage = (content: unknown) => {
+        get().addPendingMessage("claude", content);
+      };
+      const claudeMock = createClaudeMock(iframe, mock, logAction, onToolCall, onMessage);
       set({ _claudeMock: claudeMock });
-      iframe.removeAttribute("srcdoc");
-      iframe.src = getRawWidgetUrl(name);
+      iframe.srcdoc = html;
     }
   },
 
