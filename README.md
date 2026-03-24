@@ -14,14 +14,14 @@ curl -fsSL https://raw.githubusercontent.com/cptrodgers/mcpr/main/scripts/instal
 
 ### MCP Tunnel
 
-Expose your local MCP server to ChatGPT, Claude, or any AI client — one command, public HTTPS, no ngrok subscription.
+Expose your local MCP server to ChatGPT, Claude, or any AI client — one command, public HTTPS.
 
 ```bash
 mcpr --mcp http://localhost:9000
 # → https://abc123.tunnel.mcpr.app
 ```
 
-Running widgets too? mcpr merges both services behind a single URL — no need to pay for two ngrok endpoints. `/mcp` routes to your backend, everything else serves your widgets.
+Running widgets server/static assets too? mcpr merges both services behind a single URL. `/mcp` routes to your backend, everything else serves your widgets.
 
 ```bash
 mcpr --mcp http://localhost:9000 --widgets http://localhost:4444
@@ -64,21 +64,15 @@ AI clients require CSP headers, widget domains, and OAuth URLs tailored to each 
 - **Widget & OAuth domains** — rewrite URLs so your server stays environment-agnostic
 - **Zero redeploy** — change config at the proxy, not in your application
 
-## Why Not Just ngrok?
+## Why mcpr over a generic tunnel?
 
-**For simple MCP Apps, ngrok works fine.** If you bundle your widget into a single HTML file and return it inline from your MCP tool, one ngrok tunnel is all you need.
+A generic tunnel (ngrok, Cloudflare Tunnel, etc.) gets you a public URL — that's it. mcpr is purpose-built for MCP App development:
 
-mcpr is for when that stops working:
-
-| Scenario | ngrok | mcpr |
-|----------|-------|------|
-| Single bundled widget | Works | Works |
-| MCP server + separate widget/Vite server | Separate URLs per tunnel; paid plan for path-based routing | One URL, automatic routing |
-| Hot-reload development (Vite/webpack HMR) | Need to rebuild + re-bundle on every change | Proxy to dev server, instant reload |
-| Multiple complex widgets with external assets | Must inline or host assets on a CDN | Serve assets from disk or dev server |
-| Widget HTML with relative paths (`/style.css`) | Breaks in sandboxed iframes | Auto-rewritten to tunnel URL |
-| Local widget testing | Connect to real AI client | Studio — no API key needed |
-| CSP headers per environment | Manual configuration | Auto-rewritten at proxy layer |
+- **One URL, two services** — MCP server + widget dev server merged behind a single endpoint with automatic routing. No need for separate tunnels.
+- **Hot reload** — proxy to your Vite/webpack dev server for instant feedback instead of rebuilding and re-bundling on every change.
+- **Asset path rewriting** — relative paths like `/style.css` break inside sandboxed iframes. mcpr rewrites them to the tunnel URL automatically.
+- **CSP at the proxy layer** — AI clients require specific Content Security Policy headers. mcpr injects them per environment so your server stays agnostic.
+- **Studio** — test tools and widgets locally without connecting to a real AI client.
 
 ## Getting Started
 
