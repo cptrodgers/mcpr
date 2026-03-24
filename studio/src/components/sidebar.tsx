@@ -10,39 +10,74 @@ function displayName(name: string) {
 
 export function Sidebar() {
   const {
-    widgets, tools, resources, loading, mcpError,
-    token, tokenDraft, authOpen,
+    widgets,
+    tools,
+    resources,
+    loading,
+    mcpError,
+    token,
+    tokenDraft,
+    authOpen,
     selected,
-    loadAll, setToken, saveToken, clearToken, setAuthOpen, select,
+    loadAll,
+    setToken,
+    saveToken,
+    clearToken,
+    setAuthOpen,
+    select,
   } = useStore();
 
   const [filter, setFilter] = useState("");
-  const [sections, setSections] = useState({ tools: true, widgets: true, resources: true });
+  const [sections, setSections] = useState({
+    tools: true,
+    widgets: true,
+    resources: true,
+  });
   const toggleSection = (key: keyof typeof sections) =>
     setSections((s) => ({ ...s, [key]: !s[key] }));
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    loadAll();
+  }, []);
 
   const q = filter.toLowerCase();
-  const filteredTools = useMemo(() =>
-    q ? tools.filter((t) => t.name.toLowerCase().includes(q) || t.description?.toLowerCase().includes(q)) : tools,
+  const filteredTools = useMemo(
+    () =>
+      q
+        ? tools.filter(
+            (t) =>
+              t.name.toLowerCase().includes(q) ||
+              t.description?.toLowerCase().includes(q)
+          )
+        : tools,
     [tools, q]
   );
-  const filteredWidgets = useMemo(() =>
-    q ? widgets.filter((w) => w.name.toLowerCase().includes(q)) : widgets,
+  const filteredWidgets = useMemo(
+    () =>
+      q ? widgets.filter((w) => w.name.toLowerCase().includes(q)) : widgets,
     [widgets, q]
   );
-  const filteredResources = useMemo(() =>
-    q ? resources.filter((r) => r.name?.toLowerCase().includes(q) || r.uri.toLowerCase().includes(q)) : resources,
+  const filteredResources = useMemo(
+    () =>
+      q
+        ? resources.filter(
+            (r) =>
+              r.name?.toLowerCase().includes(q) ||
+              r.uri.toLowerCase().includes(q)
+          )
+        : resources,
     [resources, q]
   );
 
   function isItemSelected(item: SelectedItem): boolean {
     if (!selected) return false;
     if (selected.type !== item.type) return false;
-    if (item.type === "widget" && selected.type === "widget") return item.name === selected.name;
-    if (item.type === "tool" && selected.type === "tool") return item.tool.name === selected.tool.name;
-    if (item.type === "resource" && selected.type === "resource") return item.resource.uri === selected.resource.uri;
+    if (item.type === "widget" && selected.type === "widget")
+      return item.name === selected.name;
+    if (item.type === "tool" && selected.type === "tool")
+      return item.tool.name === selected.tool.name;
+    if (item.type === "resource" && selected.type === "resource")
+      return item.resource.uri === selected.resource.uri;
     return false;
   }
 
@@ -51,20 +86,32 @@ export function Sidebar() {
       onClick={() => select(item)}
       title={sublabel || label}
       className={`w-full text-left px-3 py-1 hover:bg-secondary/50 transition-colors ${
-        isItemSelected(item) ? "bg-secondary text-foreground" : "text-muted-foreground"
+        isItemSelected(item)
+          ? "bg-secondary text-foreground"
+          : "text-muted-foreground"
       }`}
     >
       <span className="block text-xs truncate">{label}</span>
-      {sublabel && <span className="block text-[10px] text-muted-foreground/60 truncate">{sublabel}</span>}
+      {sublabel && (
+        <span className="block text-[10px] text-muted-foreground/60 truncate">
+          {sublabel}
+        </span>
+      )}
     </button>
   );
 
-  const sectionHeader = (key: keyof typeof sections, label: string, count: number) => (
+  const sectionHeader = (
+    key: keyof typeof sections,
+    label: string,
+    count: number
+  ) => (
     <button
       onClick={() => toggleSection(key)}
       className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-secondary/30 transition-colors"
     >
-      <span>{label} <span className="normal-case font-normal">{count}</span></span>
+      <span>
+        {label} <span className="normal-case font-normal">{count}</span>
+      </span>
       <span className="text-[8px]">{sections[key] ? "▼" : "▶"}</span>
     </button>
   );
@@ -81,7 +128,9 @@ export function Sidebar() {
           <span className="font-semibold text-sm">mcpr studio</span>
         </div>
         {isRemoteProxy() && (
-          <p className="text-[10px] text-muted-foreground font-mono mt-1 truncate">{getBaseUrl()}</p>
+          <p className="text-[10px] text-muted-foreground font-mono mt-1 truncate">
+            {getBaseUrl()}
+          </p>
         )}
       </div>
 
@@ -93,8 +142,16 @@ export function Sidebar() {
         >
           <span>
             Auth
-            {hasToken && !authOpen && <span className="ml-1.5 text-green-500 normal-case font-normal">●</span>}
-            {mcpError && !hasToken && !authOpen && <span className="ml-1.5 text-destructive normal-case font-normal">● 401</span>}
+            {hasToken && !authOpen && (
+              <span className="ml-1.5 text-green-500 normal-case font-normal">
+                ●
+              </span>
+            )}
+            {mcpError && !hasToken && !authOpen && (
+              <span className="ml-1.5 text-destructive normal-case font-normal">
+                ● 401
+              </span>
+            )}
           </span>
           <span className="text-[8px]">{authOpen ? "▲" : "▼"}</span>
         </button>
@@ -110,13 +167,32 @@ export function Sidebar() {
                 className="flex-1 min-w-0 bg-secondary text-secondary-foreground rounded px-2 py-1 text-xs border-0 font-mono"
               />
               {hasToken ? (
-                <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5 shrink-0" onClick={clearToken}>✕</Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 shrink-0"
+                  onClick={clearToken}
+                >
+                  ✕
+                </Button>
               ) : (
-                <Button size="sm" className="h-6 text-xs px-2 shrink-0" onClick={saveToken}>Set</Button>
+                <Button
+                  size="sm"
+                  className="h-6 text-xs px-2 shrink-0"
+                  onClick={saveToken}
+                >
+                  Set
+                </Button>
               )}
             </div>
-            {mcpError && !hasToken && <p className="text-[10px] text-destructive mt-1">401 — token required</p>}
-            {hasToken && <p className="text-[10px] text-green-500 mt-1">connected</p>}
+            {mcpError && !hasToken && (
+              <p className="text-[10px] text-destructive mt-1">
+                401 — token required
+              </p>
+            )}
+            {hasToken && (
+              <p className="text-[10px] text-green-500 mt-1">connected</p>
+            )}
           </div>
         )}
       </div>
@@ -136,46 +212,84 @@ export function Sidebar() {
 
       {/* Sections */}
       <div className="flex-1 overflow-y-auto">
-        {loading && <p className="text-muted-foreground text-xs px-3 py-3">Loading…</p>}
+        {loading && (
+          <p className="text-muted-foreground text-xs px-3 py-3">Loading…</p>
+        )}
 
         {filteredTools.length > 0 && (
           <div>
             {sectionHeader("tools", "Tools", filteredTools.length)}
-            {sections.tools && filteredTools.map((t) =>
-              <div key={t.name}>{itemBtn({ type: "tool", tool: t }, displayName(t.name), t.description)}</div>
-            )}
+            {sections.tools &&
+              filteredTools.map((t) => (
+                <div key={t.name}>
+                  {itemBtn(
+                    { type: "tool", tool: t },
+                    displayName(t.name),
+                    t.description
+                  )}
+                </div>
+              ))}
           </div>
         )}
 
         {filteredWidgets.length > 0 && (
           <div>
             {sectionHeader("widgets", "Widgets", filteredWidgets.length)}
-            {sections.widgets && filteredWidgets.map((w) =>
-              <div key={w.name}>{itemBtn({ type: "widget", name: w.name }, displayName(w.name))}</div>
-            )}
+            {sections.widgets &&
+              filteredWidgets.map((w) => (
+                <div key={w.name}>
+                  {itemBtn(
+                    { type: "widget", name: w.name },
+                    displayName(w.name)
+                  )}
+                </div>
+              ))}
           </div>
         )}
 
         {filteredResources.length > 0 && (
           <div>
             {sectionHeader("resources", "Resources", filteredResources.length)}
-            {sections.resources && filteredResources.map((r) =>
-              <div key={r.uri}>{itemBtn({ type: "resource", resource: r }, r.name || r.uri, r.description)}</div>
-            )}
+            {sections.resources &&
+              filteredResources.map((r) => (
+                <div key={r.uri}>
+                  {itemBtn(
+                    { type: "resource", resource: r },
+                    r.name || r.uri,
+                    r.description
+                  )}
+                </div>
+              ))}
           </div>
         )}
 
         {!loading && totalItems === 0 && (
-          <p className="text-muted-foreground text-xs px-3 py-3">No tools, widgets, or resources found.</p>
+          <p className="text-muted-foreground text-xs px-3 py-3">
+            No tools, widgets, or resources found.
+          </p>
         )}
       </div>
 
       {/* Footer */}
       <div className="px-4 py-3 border-t shrink-0 text-[10px] text-muted-foreground">
         <div className="flex items-center gap-2">
-          <a href="https://mcpr.app" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">mcpr.app</a>
+          <a
+            href="https://mcpr.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground transition-colors"
+          >
+            mcpr.app
+          </a>
           <span>·</span>
-          <a href="https://github.com/cptrodgers/mcpr" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
+          <a
+            href="https://github.com/cptrodgers/mcpr"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground transition-colors"
+          >
+            GitHub
+          </a>
         </div>
       </div>
     </div>

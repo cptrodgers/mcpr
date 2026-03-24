@@ -64,7 +64,7 @@ let initPromise: Promise<void> | null = null;
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "Accept": "application/json, text/event-stream",
+    Accept: "application/json, text/event-stream",
   };
   const token = getAuthToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -72,7 +72,10 @@ function buildHeaders(): Record<string, string> {
   return headers;
 }
 
-async function rawMcpPost(method: string, params: Record<string, unknown> = {}): Promise<Response> {
+async function rawMcpPost(
+  method: string,
+  params: Record<string, unknown> = {}
+): Promise<Response> {
   return fetch(getBaseUrl(), {
     method: "POST",
     headers: buildHeaders(),
@@ -123,13 +126,20 @@ async function ensureSession(): Promise<void> {
     if (sid) sessionId = sid;
 
     const data = await parseResponse(resp);
-    if (data.error) throw new Error((data.error as { message?: string }).message || JSON.stringify(data.error));
+    if (data.error)
+      throw new Error(
+        (data.error as { message?: string }).message ||
+          JSON.stringify(data.error)
+      );
 
     // Send initialized notification (no id = notification)
     await fetch(getBaseUrl(), {
       method: "POST",
       headers: buildHeaders(),
-      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      }),
     });
   })();
 
@@ -146,11 +156,17 @@ export function resetSession() {
   initPromise = null;
 }
 
-export async function mcpCall(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+export async function mcpCall(
+  method: string,
+  params: Record<string, unknown> = {}
+): Promise<unknown> {
   await ensureSession();
   const resp = await rawMcpPost(method, params);
   const data = await parseResponse(resp);
-  if (data.error) throw new Error((data.error as { message?: string }).message || JSON.stringify(data.error));
+  if (data.error)
+    throw new Error(
+      (data.error as { message?: string }).message || JSON.stringify(data.error)
+    );
   return data.result;
 }
 
@@ -166,7 +182,10 @@ export async function listTools(): Promise<McpToolInfo[]> {
   return result.tools || [];
 }
 
-export async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+export async function callTool(
+  name: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
   return mcpCall("tools/call", { name, arguments: args });
 }
 
@@ -179,7 +198,9 @@ export interface McpResourceInfo {
 }
 
 export async function listResources(): Promise<McpResourceInfo[]> {
-  const result = (await mcpCall("resources/list")) as { resources?: McpResourceInfo[] };
+  const result = (await mcpCall("resources/list")) as {
+    resources?: McpResourceInfo[];
+  };
   return result.resources || [];
 }
 

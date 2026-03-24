@@ -8,7 +8,10 @@ export function createClaudeMock(
   iframe: HTMLIFrameElement,
   mock: MockData,
   onAction: (method: string, args: unknown) => void,
-  onToolCall?: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+  onToolCall?: (
+    name: string,
+    args: Record<string, unknown>
+  ) => Promise<unknown>,
   onMessage?: (content: unknown) => void
 ) {
   let currentMock = { ...mock };
@@ -45,9 +48,7 @@ export function createClaudeMock(
     }
 
     sendNotification("ui/notifications/tool-result", {
-      content: [
-        { type: "text", text: JSON.stringify(currentMock.toolOutput) },
-      ],
+      content: [{ type: "text", text: JSON.stringify(currentMock.toolOutput) }],
       structuredContent: currentMock.toolOutput,
       _meta: currentMock._meta || {},
     });
@@ -100,12 +101,18 @@ export function createClaudeMock(
         case "tools/call":
           onAction("callServerTool", params);
           if (onToolCall) {
-            const toolParams = params as { name?: string; arguments?: Record<string, unknown> };
+            const toolParams = params as {
+              name?: string;
+              arguments?: Record<string, unknown>;
+            };
             const toolName = toolParams.name || "";
             const toolArgs = toolParams.arguments || {};
             onToolCall(toolName, toolArgs)
               .then((result) => {
-                const content = result as { content?: Array<{ type: string; text?: string }>; meta?: Record<string, unknown> };
+                const content = result as {
+                  content?: Array<{ type: string; text?: string }>;
+                  meta?: Record<string, unknown>;
+                };
                 if (content.content) {
                   sendResponse(id, { content: content.content });
                 } else {
@@ -117,10 +124,18 @@ export function createClaudeMock(
               })
               .catch((err) => {
                 sendResponse(id, {
-                  content: [{ type: "text", text: JSON.stringify({ error: (err as Error).message }) }],
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ error: (err as Error).message }),
+                    },
+                  ],
                   isError: true,
                 });
-                onAction("callServerTool:error", { name: toolName, error: (err as Error).message });
+                onAction("callServerTool:error", {
+                  name: toolName,
+                  error: (err as Error).message,
+                });
               });
           } else {
             sendResponse(id, {
@@ -144,7 +159,9 @@ export function createClaudeMock(
         case "ui/request-display-mode":
         case "ui/requestDisplayMode":
           onAction("requestDisplayMode", params);
-          sendResponse(id, { mode: (params as { mode?: string }).mode || "inline" });
+          sendResponse(id, {
+            mode: (params as { mode?: string }).mode || "inline",
+          });
           break;
 
         case "notifications/size-changed":
@@ -157,7 +174,8 @@ export function createClaudeMock(
 
         case "ui/sendLog":
         case "logging/setLevel":
-          if ((params as { data?: unknown }).data) onAction("widget:log", params);
+          if ((params as { data?: unknown }).data)
+            onAction("widget:log", params);
           sendResponse(id, {});
           break;
 

@@ -1,7 +1,4 @@
-import {
-  createRootRoute,
-  createRoute,
-} from "@tanstack/react-router";
+import { createRootRoute, createRoute } from "@tanstack/react-router";
 import { StudioLayout } from "./pages/studio-layout";
 
 const rootRoute = createRootRoute({

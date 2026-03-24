@@ -6,7 +6,14 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 type Tab = "widget" | "json";
 
 export function WidgetPreview() {
-  const { jsonOutput, lastResult, resolveWidgetName, setIframeRef, logAction, addPendingMessage } = useStore();
+  const {
+    jsonOutput,
+    lastResult,
+    resolveWidgetName,
+    setIframeRef,
+    logAction,
+    addPendingMessage,
+  } = useStore();
   const widgetName = resolveWidgetName();
   const [activeTab, setActiveTab] = useState<Tab>("widget");
 
@@ -16,9 +23,12 @@ export function WidgetPreview() {
     else if (!widgetName && jsonOutput) setActiveTab("json");
   }, [widgetName, lastResult, jsonOutput]);
 
-  const refCallback = useCallback((el: HTMLIFrameElement | null) => {
-    setIframeRef(el);
-  }, [setIframeRef]);
+  const refCallback = useCallback(
+    (el: HTMLIFrameElement | null) => {
+      setIframeRef(el);
+    },
+    [setIframeRef]
+  );
 
   // Listen for iframe messages
   useEffect(() => {
@@ -28,6 +38,33 @@ export function WidgetPreview() {
       if (data.type === "mcpr_resize" && data.height) {
         const iframe = useStore.getState()._iframeRef;
         if (iframe) iframe.style.height = `${data.height}px`;
+        return;
+      }
+      // Sandbox violation reports from the runtime trap script
+      if (data.type === "mcpr_sandbox_violation") {
+        const state = useStore.getState();
+        const categoryLabels: Record<string, string> = {
+          storage: "sandbox (storage)",
+          permission: "sandbox (permission)",
+          device: "sandbox (device API)",
+          worker: "sandbox (worker)",
+          navigation: "sandbox (navigation)",
+        };
+        const widgetName = state.resolveWidgetName();
+        state.addCspViolation({
+          id: `sb_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          time: new Date().toTimeString().split(" ")[0],
+          directive: categoryLabels[data.category] || "sandbox",
+          blockedUri: data.api || "",
+          sourceFile: widgetName ? `/widgets/${widgetName}.html` : "",
+          lineNumber: 0,
+          columnNumber: 0,
+          source: "runtime",
+          severity: data.severity === "warning" ? "warning" : "error",
+          fix:
+            data.message ||
+            `${data.api} is not available in widget sandboxed iframe`,
+        });
         return;
       }
       if (data.type === "mcpr_action") {
@@ -45,9 +82,16 @@ export function WidgetPreview() {
               );
             })
             .catch((err) => {
-              logAction("callTool:error", { name: data.args.name, error: (err as Error).message });
+              logAction("callTool:error", {
+                name: data.args.name,
+                error: (err as Error).message,
+              });
               iframe?.contentWindow?.postMessage(
-                { type: "mcpr_tool_result", callId: data.callId, result: { error: (err as Error).message } },
+                {
+                  type: "mcpr_tool_result",
+                  callId: data.callId,
+                  result: { error: (err as Error).message },
+                },
                 "*"
               );
             });
@@ -63,6 +107,65 @@ export function WidgetPreview() {
     return () => window.removeEventListener("message", handleMessage);
   }, [logAction, addPendingMessage]);
 
+  // Listen for CSP violations from the iframe
+  useEffect(() => {
+    function handleViolation(event: SecurityPolicyViolationEvent) {
+      const state = useStore.getState();
+      const widgetName = state.resolveWidgetName();
+      state.addCspViolation({
+        id: `rt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        time: new Date().toTimeString().split(" ")[0],
+        directive: event.violatedDirective,
+        blockedUri: event.blockedURI || "(inline)",
+        sourceFile:
+          event.sourceFile || (widgetName ? `/widgets/${widgetName}.html` : ""),
+        lineNumber: event.lineNumber || 0,
+        columnNumber: event.columnNumber || 0,
+        source: "runtime",
+        severity: "error",
+      });
+    }
+
+    // The securitypolicyviolation event fires on the document when CSP blocks something.
+    // For srcdoc iframes, we try to listen on the iframe's document when accessible.
+    function attachToIframe() {
+      try {
+        const iframe = useStore.getState()._iframeRef;
+        const doc = iframe?.contentDocument;
+        if (doc) {
+          doc.addEventListener(
+            "securitypolicyviolation",
+            handleViolation as EventListener
+          );
+        }
+      } catch {
+        /* cross-origin — strict mode without allow-same-origin */
+      }
+    }
+
+    // Also listen on the main document (some violations bubble up)
+    document.addEventListener("securitypolicyviolation", handleViolation);
+
+    // Re-attach after iframe loads
+    const iframe = useStore.getState()._iframeRef;
+    const onLoad = () => attachToIframe();
+    iframe?.addEventListener("load", onLoad);
+    attachToIframe();
+
+    return () => {
+      document.removeEventListener("securitypolicyviolation", handleViolation);
+      iframe?.removeEventListener("load", onLoad);
+      try {
+        iframe?.contentDocument?.removeEventListener(
+          "securitypolicyviolation",
+          handleViolation as EventListener
+        );
+      } catch {
+        /* ignore */
+      }
+    };
+  }, []);
+
   // Auto-resize fallback
   useEffect(() => {
     const interval = setInterval(() => {
@@ -73,14 +176,17 @@ export function WidgetPreview() {
         if (h > 50 && Math.abs(iframe.offsetHeight - h) > 10) {
           iframe.style.height = `${h}px`;
         }
-      } catch { /* cross-origin */ }
+      } catch {
+        /* cross-origin */
+      }
     }, 500);
     return () => clearInterval(interval);
   }, []);
 
   const hasWidget = !!widgetName;
   const hasJson = !!jsonOutput || !!lastResult;
-  const jsonText = jsonOutput || (lastResult ? JSON.stringify(lastResult, null, 2) : null);
+  const jsonText =
+    jsonOutput || (lastResult ? JSON.stringify(lastResult, null, 2) : null);
   const showTabs = hasWidget && hasJson;
 
   // No widget and no JSON — empty state
@@ -102,7 +208,9 @@ export function WidgetPreview() {
           </span>
         </div>
         <ScrollArea className="flex-1 min-h-0">
-          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground select-text">{jsonText}</pre>
+          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground select-text">
+            {jsonText}
+          </pre>
         </ScrollArea>
       </div>
     );
@@ -155,7 +263,9 @@ export function WidgetPreview() {
       {/* JSON view */}
       {showTabs && activeTab === "json" && (
         <ScrollArea className="flex-1 min-h-0">
-          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground select-text">{jsonText}</pre>
+          <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-all text-foreground select-text">
+            {jsonText}
+          </pre>
         </ScrollArea>
       )}
     </div>
