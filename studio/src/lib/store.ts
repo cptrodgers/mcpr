@@ -338,9 +338,18 @@ export const useStore = create<StudioState>((set, get) => ({
     set({ platform: p });
     setTimeout(() => get().loadWidget(), 50);
   },
-  setTheme: (t) => set({ theme: t }),
-  setLocale: (l) => set({ locale: l }),
-  setDisplayMode: (d) => set({ displayMode: d }),
+  setTheme: (t) => {
+    set({ theme: t });
+    setTimeout(() => get().applyMock(), 50);
+  },
+  setLocale: (l) => {
+    set({ locale: l });
+    setTimeout(() => get().applyMock(), 50);
+  },
+  setDisplayMode: (d) => {
+    set({ displayMode: d });
+    setTimeout(() => get().applyMock(), 50);
+  },
 
   logAction: (method, args) => {
     const argsStr = typeof args === "string" ? args : JSON.stringify(args);
