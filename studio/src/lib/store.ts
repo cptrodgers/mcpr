@@ -31,6 +31,22 @@ import { analyzeHtml } from "./csp-checker";
 
 export type Platform = "openai" | "claude";
 
+export type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom";
+
+export interface ViewportSize {
+  width: number;
+  height: number;
+}
+
+export const VIEWPORT_PRESETS: Record<
+  Exclude<ViewportPreset, "custom">,
+  ViewportSize
+> = {
+  desktop: { width: 1280, height: 800 },
+  tablet: { width: 820, height: 1180 },
+  mobile: { width: 430, height: 932 },
+};
+
 export type SelectedItem =
   | { type: "widget"; name: string }
   | { type: "tool"; tool: McpToolInfo }
@@ -236,6 +252,8 @@ interface StudioState {
   theme: string;
   locale: string;
   displayMode: string;
+  viewportPreset: ViewportPreset;
+  viewportCustom: ViewportSize;
 
   // Execution
   executing: boolean;
@@ -264,6 +282,9 @@ interface StudioState {
   setTheme: (t: string) => void;
   setLocale: (l: string) => void;
   setDisplayMode: (d: string) => void;
+  setViewportPreset: (p: ViewportPreset) => void;
+  setViewportCustom: (size: Partial<ViewportSize>) => void;
+  getViewportSize: () => ViewportSize;
   logAction: (method: string, args: unknown) => void;
   clearActions: () => void;
   addPendingMessage: (source: "openai" | "claude", content: unknown) => void;
@@ -307,6 +328,8 @@ export const useStore = create<StudioState>((set, get) => ({
   theme: "dark",
   locale: "en-US",
   displayMode: "compact",
+  viewportPreset: "mobile" as ViewportPreset,
+  viewportCustom: { width: 430, height: 932 },
 
   // Execution
   executing: false,
@@ -427,6 +450,17 @@ export const useStore = create<StudioState>((set, get) => ({
     set({ displayMode: d });
     setTimeout(() => get().applyMock(), 50);
   },
+  setViewportPreset: (p) => set({ viewportPreset: p }),
+  setViewportCustom: (size) => {
+    set((s) => ({
+      viewportCustom: { ...s.viewportCustom, ...size },
+    }));
+  },
+  getViewportSize: () => {
+    const { viewportPreset, viewportCustom } = get();
+    if (viewportPreset === "custom") return viewportCustom;
+    return VIEWPORT_PRESETS[viewportPreset];
+  },
 
   logAction: (method, args) => {
     const argsStr = typeof args === "string" ? args : JSON.stringify(args);
@@ -543,6 +577,9 @@ export const useStore = create<StudioState>((set, get) => ({
     } = get();
     const name = overrideWidgetName || get().resolveWidgetName();
     if (!name || !iframe) return;
+
+    // Reset inline height from previous render so auto-resize starts fresh
+    iframe.style.height = "";
 
     // Cleanup previous claude mock
     get()._claudeMock?.destroy();
