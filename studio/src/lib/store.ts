@@ -552,19 +552,28 @@ export const useStore = create<StudioState>((set, get) => ({
     // ChatGPT and Claude actually host widgets in production.
     const resp = await fetch(getRawWidgetUrl(name));
     let html = await resp.text();
+
     // The backend rewrites asset URLs to the tunnel domain (e.g. https://xxx.tunnel.mcpr.app/assets/...).
     // For srcdoc, the iframe origin is localhost, so those cross-origin requests fail (CORS).
     // Rewrite them back to the local proxy which can serve the same assets without CORS issues.
     const baseUrl = getBaseUrl();
+    // Strip tunnel/proxy URLs back to relative paths for static analysis.
+    // This restores the original paths (e.g. "/assets/main.js") so the analyzer
+    // sees what the developer actually wrote, not the rewritten URLs.
+    const originalHtml = html.replace(
+      /https?:\/\/[a-z0-9]+\.tunnel\.mcpr\.app/gi,
+      ""
+    );
     html = html.replace(/https?:\/\/[a-z0-9]+\.tunnel\.mcpr\.app/gi, baseUrl);
 
     // Extract CSP domains from mock metadata
     const meta = (mock._meta || {}) as Record<string, unknown>;
     const cspDomains = extractCspDomains(meta);
 
-    // Run static analysis (always, regardless of strict mode)
+    // Run static analysis on the original HTML (with tunnel URLs stripped to
+    // relative paths) so violations show what the developer actually wrote.
     const widgetSource = `/widgets/${name}.html`;
-    const staticIssues = analyzeHtml(html, cspDomains);
+    const staticIssues = analyzeHtml(originalHtml, cspDomains);
     for (const issue of staticIssues) {
       addCspViolation({
         id: `static_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,

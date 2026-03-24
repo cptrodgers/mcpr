@@ -81,7 +81,7 @@ export function StudioLayout() {
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  Sandbox
+                  Sandbox Enforcement
                   {cspViolations.length > 0 && (
                     <span
                       className={`px-1.5 py-0 rounded-full text-[10px] font-semibold ${

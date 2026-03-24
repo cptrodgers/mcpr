@@ -52,7 +52,7 @@ export function analyzeHtml(html: string, domains: CspDomains): CspIssue[] {
   const issues: CspIssue[] = [];
   const both: ("ChatGPT" | "Claude")[] = ["ChatGPT", "Claude"];
 
-  // 1. External script tags: <script src="https://...">
+  // 1a. External script tags: <script src="https://...">
   const scriptSrcRe = /<script[^>]+src\s*=\s*["']?(https?:\/\/[^"'\s>]+)/gi;
   let m: RegExpExecArray | null;
   while ((m = scriptSrcRe.exec(html)) !== null) {
@@ -70,7 +70,24 @@ export function analyzeHtml(html: string, domains: CspDomains): CspIssue[] {
     }
   }
 
-  // 2. External stylesheets: <link href="https://..." rel="stylesheet">
+  // 1b. Relative/absolute path script tags: <script src="/..."> or <script src="./...">
+  // These break in sandboxed iframes because paths resolve against the sandbox origin, not your server.
+  const scriptRelRe = /<script[^>]+src\s*=\s*["'](\.{0,2}\/[^"'\s>]+)/gi;
+  while ((m = scriptRelRe.exec(html)) !== null) {
+    const path = m[1];
+    issues.push({
+      severity: "error",
+      directive: "script-src",
+      description:
+        "Relative path will not resolve in sandboxed iframe — bundle scripts inline or use absolute URLs",
+      blocked: path,
+      fix: "Option 1: Bundle inline using a build tool (e.g. vite-plugin-singlefile). Option 2: Serve via mcpr proxy — it auto-rewrites paths and handles CSP",
+      platforms: both,
+      line: lineOf(html, m.index),
+    });
+  }
+
+  // 2a. External stylesheets: <link href="https://..." rel="stylesheet">
   const linkRe = /<link[^>]+href\s*=\s*["']?(https?:\/\/[^"'\s>]+)[^>]*>/gi;
   while ((m = linkRe.exec(html)) !== null) {
     const tag = m[0];
@@ -85,6 +102,25 @@ export function analyzeHtml(html: string, domains: CspDomains): CspIssue[] {
         description: "External stylesheet not in resource_domains",
         blocked: url,
         fix: `Add "${extractOrigin(url)}" to resource_domains / resourceDomains in your widget CSP metadata`,
+        platforms: both,
+        line: lineOf(html, m.index),
+      });
+    }
+  }
+
+  // 2b. Relative/absolute path stylesheets: <link href="/..." rel="stylesheet">
+  const linkRelRe = /<link[^>]+href\s*=\s*["'](\.{0,2}\/[^"'\s>]+)[^>]*>/gi;
+  while ((m = linkRelRe.exec(html)) !== null) {
+    const tag = m[0];
+    const path = m[1];
+    if (/rel\s*=\s*["']?stylesheet/i.test(tag)) {
+      issues.push({
+        severity: "error",
+        directive: "style-src",
+        description:
+          "Relative path will not resolve in sandboxed iframe — bundle styles inline or use absolute URLs",
+        blocked: path,
+        fix: "Option 1: Bundle inline using a build tool (e.g. vite-plugin-singlefile). Option 2: Serve via mcpr proxy — it auto-rewrites paths and handles CSP",
         platforms: both,
         line: lineOf(html, m.index),
       });

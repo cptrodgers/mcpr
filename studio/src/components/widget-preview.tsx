@@ -193,7 +193,7 @@ export function WidgetPreview() {
   if (!hasWidget && !hasJson) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-        Select a widget to preview
+        No widget to preview
       </div>
     );
   }
@@ -219,30 +219,41 @@ export function WidgetPreview() {
   // Has widget (possibly also JSON result) — show tabs if both
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {showTabs && (
-        <div className="flex border-b shrink-0">
+      <div className="flex border-b shrink-0">
+        {showTabs && (
+          <>
+            <button
+              onClick={() => setActiveTab("widget")}
+              className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                activeTab === "widget"
+                  ? "text-foreground border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Widget
+            </button>
+            <button
+              onClick={() => setActiveTab("json")}
+              className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                activeTab === "json"
+                  ? "text-foreground border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              JSON
+            </button>
+          </>
+        )}
+        <div className="ml-auto flex items-center">
           <button
-            onClick={() => setActiveTab("widget")}
-            className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-              activeTab === "widget"
-                ? "text-foreground border-b-2 border-primary"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
+            onClick={() => useStore.getState().loadWidget()}
+            className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+            title="Reload widget HTML"
           >
-            Widget
-          </button>
-          <button
-            onClick={() => setActiveTab("json")}
-            className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-              activeTab === "json"
-                ? "text-foreground border-b-2 border-primary"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            JSON
+            ↻ Reload
           </button>
         </div>
-      )}
+      </div>
 
       {/* Widget iframe — always mounted but hidden when JSON tab active */}
       <div

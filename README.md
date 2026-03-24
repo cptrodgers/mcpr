@@ -1,6 +1,6 @@
 # mcpr
 
-Proxy layer for [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) (ChatGPT App SDK, Claude Customize, etc) — from localhost to production. Tunnel, debug, deploy, and monitor your MCP App.
+Proxy layer for [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) (ChatGPT App SDK, Claude Customize, etc) — tunnel, test, and debug your MCP App from localhost.
 
 ![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
 
@@ -63,6 +63,22 @@ AI clients require CSP headers, widget domains, and OAuth URLs tailored to each 
 - **CSP headers** — inject or extend Content Security Policy per environment
 - **Widget & OAuth domains** — rewrite URLs so your server stays environment-agnostic
 - **Zero redeploy** — change config at the proxy, not in your application
+
+## Why Not Just ngrok?
+
+**For simple MCP Apps, ngrok works fine.** If you bundle your widget into a single HTML file and return it inline from your MCP tool, one ngrok tunnel is all you need.
+
+mcpr is for when that stops working:
+
+| Scenario | ngrok | mcpr |
+|----------|-------|------|
+| Single bundled widget | Works | Works |
+| MCP server + separate widget/Vite server | Separate URLs per tunnel; paid plan for path-based routing | One URL, automatic routing |
+| Hot-reload development (Vite/webpack HMR) | Need to rebuild + re-bundle on every change | Proxy to dev server, instant reload |
+| Multiple complex widgets with external assets | Must inline or host assets on a CDN | Serve assets from disk or dev server |
+| Widget HTML with relative paths (`/style.css`) | Breaks in sandboxed iframes | Auto-rewritten to tunnel URL |
+| Local widget testing | Connect to real AI client | Studio — no API key needed |
+| CSP headers per environment | Manual configuration | Auto-rewritten at proxy layer |
 
 ## Getting Started
 

@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 const DOCS: Record<string, { label: string; url: string }> = {
   openai: {
-    label: "OpenAI Widget Docs",
-    url: "https://platform.openai.com/docs/guides/tools-remote/widget-rendering",
+    label: "MCP Apps Docs",
+    url: "https://modelcontextprotocol.io/extensions/apps/build",
   },
   claude: {
     label: "MCP Apps Docs",
@@ -139,16 +139,7 @@ export function CspPanel() {
             </p>
             <p className="text-[10px] text-muted-foreground/60">
               <a
-                href={DOCS.openai.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-foreground transition-colors underline"
-              >
-                OpenAI Widget Rendering
-              </a>
-              {" \u00B7 "}
-              <a
-                href={DOCS.claude.url}
+                href="https://modelcontextprotocol.io/extensions/apps/build"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-foreground transition-colors underline"
