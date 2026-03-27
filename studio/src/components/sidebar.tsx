@@ -1,31 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { isRemoteProxy, getBaseUrl } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { Button } from "@/components/ui/button";
 import type { SelectedItem } from "@/lib/store";
+import { AuthPanel } from "./auth-panel";
 
 function displayName(name: string) {
   return name.replace(/_/g, " ");
 }
 
 export function Sidebar() {
-  const {
-    widgets,
-    tools,
-    resources,
-    loading,
-    mcpError,
-    token,
-    tokenDraft,
-    authOpen,
-    selected,
-    loadAll,
-    setToken,
-    saveToken,
-    clearToken,
-    setAuthOpen,
-    select,
-  } = useStore();
+  const { widgets, tools, resources, loading, selected, loadAll, select } =
+    useStore();
 
   const [filter, setFilter] = useState("");
   const [sections, setSections] = useState({
@@ -116,7 +101,6 @@ export function Sidebar() {
     </button>
   );
 
-  const hasToken = token.length > 0;
   const totalItems = tools.length + widgets.length + resources.length;
 
   return (
@@ -135,67 +119,7 @@ export function Sidebar() {
       </div>
 
       {/* Auth */}
-      <div className="border-b shrink-0">
-        <button
-          onClick={() => setAuthOpen(!authOpen)}
-          className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-secondary/50 transition-colors"
-        >
-          <span>
-            Auth
-            {hasToken && !authOpen && (
-              <span className="ml-1.5 text-green-500 normal-case font-normal">
-                ●
-              </span>
-            )}
-            {mcpError && !hasToken && !authOpen && (
-              <span className="ml-1.5 text-destructive normal-case font-normal">
-                ● 401
-              </span>
-            )}
-          </span>
-          <span className="text-[8px]">{authOpen ? "▲" : "▼"}</span>
-        </button>
-        {authOpen && (
-          <div className="px-3 pb-2">
-            <div className="flex gap-1">
-              <input
-                type="password"
-                placeholder="Bearer token"
-                value={tokenDraft}
-                onChange={(e) => setToken(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveToken()}
-                className="flex-1 min-w-0 bg-secondary text-secondary-foreground rounded px-2 py-1 text-xs border-0 font-mono"
-              />
-              {hasToken ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 shrink-0"
-                  onClick={clearToken}
-                >
-                  ✕
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  className="h-6 text-xs px-2 shrink-0"
-                  onClick={saveToken}
-                >
-                  Set
-                </Button>
-              )}
-            </div>
-            {mcpError && !hasToken && (
-              <p className="text-[10px] text-destructive mt-1">
-                401 — token required
-              </p>
-            )}
-            {hasToken && (
-              <p className="text-[10px] text-green-500 mt-1">connected</p>
-            )}
-          </div>
-        )}
-      </div>
+      <AuthPanel />
 
       {/* Search */}
       {totalItems > 5 && (
