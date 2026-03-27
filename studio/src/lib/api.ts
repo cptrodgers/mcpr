@@ -55,6 +55,20 @@ export function setAuthToken(token: string) {
   resetSession();
 }
 
+/**
+ * Returns the active bearer token — from OAuth if in oauth mode, or from
+ * the manual bearer token field.
+ */
+export function getActiveToken(): string {
+  const method = localStorage.getItem("mcpr_studio_auth_method") || "bearer";
+  if (method === "oauth") {
+    // Look for OAuth token stored per-origin
+    const origin = new URL(getBaseUrl()).origin;
+    return localStorage.getItem(`mcpr_oauth_${origin}_access_token`) || "";
+  }
+  return getAuthToken();
+}
+
 // ── MCP JSON-RPC ──
 
 let rpcId = 0;
@@ -66,7 +80,7 @@ function buildHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
   };
-  const token = getAuthToken();
+  const token = getActiveToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   if (sessionId) headers["mcp-session-id"] = sessionId;
   return headers;

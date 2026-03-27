@@ -26,6 +26,37 @@ import {
   buildSandboxTrapScript,
 } from "./csp-profiles";
 import { analyzeHtml } from "./csp-checker";
+import type {
+  OAuthDebugEvent,
+  OAuthServerMetadata,
+  ComplianceCheck,
+} from "./oauth-debug";
+import { checkCompliance, decodeToken, type DecodedToken } from "./oauth-debug";
+import {
+  discoverMetadata,
+  resolveEndpoints,
+  registerClient,
+  buildAuthorizationUrl,
+  exchangeCode,
+  refreshAccessToken as oauthRefresh,
+  generatePKCE,
+  saveTokens,
+  clearTokens,
+  savePKCEState,
+  loadPKCEState,
+  clearPKCEState,
+  getRedirectUri,
+  getAuthBaseUrl,
+  testEndpoint,
+} from "./oauth";
+
+function generateRandomString(length: number): string {
+  const array = new Uint8Array(length);
+  crypto.getRandomValues(array);
+  return Array.from(array, (b) => b.toString(36).padStart(2, "0"))
+    .join("")
+    .slice(0, length);
+}
 
 // ── Types ──
 
@@ -63,6 +94,33 @@ export interface PendingMessage {
   time: string;
   source: "openai" | "claude";
   content: unknown;
+}
+
+export type AuthMethod = "oauth" | "bearer";
+
+export type OAuthStatus =
+  | "idle"
+  | "discovering"
+  | "registering"
+  | "authorizing"
+  | "exchanging"
+  | "connected"
+  | "error";
+
+export interface OAuthState {
+  status: OAuthStatus;
+  metadata: OAuthServerMetadata | null;
+  complianceChecks: ComplianceCheck[];
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  accessToken: string | null;
+  refreshToken: string | null;
+  expiresAt: number | null;
+  scopes: string[];
+  selectedScopes: string[];
+  error: string | null;
+  decodedToken: DecodedToken | null;
 }
 
 export interface CspViolation {
@@ -237,9 +295,13 @@ interface StudioState {
   mcpError: string | null;
 
   // Auth
+  authMethod: AuthMethod;
   token: string;
   tokenDraft: string;
   authOpen: boolean;
+  oauth: OAuthState;
+  oauthDebugEvents: OAuthDebugEvent[];
+  oauthDebugOpen: boolean;
 
   // Selection
   selected: SelectedItem | null;
@@ -272,10 +334,25 @@ interface StudioState {
 
   // Actions
   loadAll: () => Promise<void>;
+  setAuthMethod: (method: AuthMethod) => void;
   setToken: (draft: string) => void;
   saveToken: () => void;
   clearToken: () => void;
   setAuthOpen: (open: boolean) => void;
+
+  // OAuth actions
+  startOAuthFlow: () => Promise<void>;
+  handleOAuthCallback: (code: string, state: string) => Promise<void>;
+  refreshOAuthToken: () => Promise<void>;
+  signOut: () => void;
+  setOAuthClientId: (id: string) => void;
+  setOAuthClientSecret: (secret: string) => void;
+  setOAuthRedirectUri: (uri: string) => void;
+  setOAuthSelectedScopes: (scopes: string[]) => void;
+  testOAuthEndpoints: () => Promise<void>;
+  addOAuthDebugEvent: (event: OAuthDebugEvent) => void;
+  clearOAuthDebugEvents: () => void;
+  setOAuthDebugOpen: (open: boolean) => void;
   select: (item: SelectedItem) => void;
   setEditorValue: (value: string) => void;
   setPlatform: (p: Platform) => void;
@@ -313,9 +390,28 @@ export const useStore = create<StudioState>((set, get) => ({
   mcpError: null,
 
   // Auth
+  authMethod:
+    (localStorage.getItem("mcpr_studio_auth_method") as AuthMethod) || "oauth",
   token: getAuthToken(),
   tokenDraft: getAuthToken(),
   authOpen: !getAuthToken(),
+  oauth: {
+    status: "idle",
+    metadata: null,
+    complianceChecks: [],
+    clientId: "",
+    clientSecret: "",
+    redirectUri: "",
+    accessToken: null,
+    refreshToken: null,
+    expiresAt: null,
+    scopes: [],
+    selectedScopes: [],
+    error: null,
+    decodedToken: null,
+  },
+  oauthDebugEvents: [],
+  oauthDebugOpen: false,
 
   // Selection
   selected: null,
@@ -387,6 +483,11 @@ export const useStore = create<StudioState>((set, get) => ({
     }
   },
 
+  setAuthMethod: (method) => {
+    localStorage.setItem("mcpr_studio_auth_method", method);
+    set({ authMethod: method });
+  },
+
   setToken: (draft) => set({ tokenDraft: draft }),
 
   saveToken: () => {
@@ -403,6 +504,282 @@ export const useStore = create<StudioState>((set, get) => ({
   },
 
   setAuthOpen: (open) => set({ authOpen: open }),
+
+  // ── OAuth Actions ──
+
+  addOAuthDebugEvent: (event) => {
+    set((s) => {
+      // Replace pending event with same id, or append new
+      const existing = s.oauthDebugEvents.findIndex((e) => e.id === event.id);
+      if (existing >= 0) {
+        const updated = [...s.oauthDebugEvents];
+        updated[existing] = event;
+        return { oauthDebugEvents: updated };
+      }
+      return { oauthDebugEvents: [...s.oauthDebugEvents, event] };
+    });
+  },
+
+  clearOAuthDebugEvents: () => set({ oauthDebugEvents: [] }),
+
+  setOAuthDebugOpen: (open) => set({ oauthDebugOpen: open }),
+
+  setOAuthClientId: (id) => {
+    set((s) => ({ oauth: { ...s.oauth, clientId: id } }));
+  },
+
+  setOAuthClientSecret: (secret) => {
+    set((s) => ({ oauth: { ...s.oauth, clientSecret: secret } }));
+  },
+
+  setOAuthRedirectUri: (uri) => {
+    set((s) => ({ oauth: { ...s.oauth, redirectUri: uri } }));
+  },
+
+  setOAuthSelectedScopes: (scopes) => {
+    set((s) => ({ oauth: { ...s.oauth, selectedScopes: scopes } }));
+  },
+
+  startOAuthFlow: async () => {
+    const baseUrl = getBaseUrl();
+    const onEvent = get().addOAuthDebugEvent;
+    const effectiveRedirectUri = get().oauth.redirectUri || getRedirectUri();
+
+    // Step 1: Metadata Discovery
+    set((s) => ({
+      oauth: { ...s.oauth, status: "discovering", error: null },
+    }));
+
+    const metadata = await discoverMetadata(baseUrl, onEvent);
+    const endpoints = resolveEndpoints(baseUrl, metadata);
+    const complianceChecks = metadata ? checkCompliance(metadata) : [];
+    const scopes = metadata?.scopes_supported || [];
+
+    set((s) => ({
+      oauth: {
+        ...s.oauth,
+        metadata,
+        complianceChecks,
+        scopes,
+        selectedScopes:
+          s.oauth.selectedScopes.length > 0 ? s.oauth.selectedScopes : scopes,
+      },
+    }));
+
+    // Step 2: Dynamic Client Registration (if no client_id set)
+    let clientId = get().oauth.clientId;
+    if (!clientId) {
+      set((s) => ({ oauth: { ...s.oauth, status: "registering" } }));
+
+      if (endpoints.registrationEndpoint) {
+        const registration = await registerClient(
+          endpoints.registrationEndpoint,
+          effectiveRedirectUri,
+          onEvent
+        );
+        if (registration) {
+          clientId = registration.clientId;
+          set((s) => ({ oauth: { ...s.oauth, clientId } }));
+        }
+      }
+
+      if (!clientId) {
+        set((s) => ({
+          oauth: {
+            ...s.oauth,
+            status: "error",
+            error:
+              "Dynamic client registration failed. Enter a client_id manually.",
+          },
+        }));
+        return;
+      }
+    }
+
+    // Step 3: Generate PKCE and redirect to authorization
+    set((s) => ({ oauth: { ...s.oauth, status: "authorizing" } }));
+
+    const { codeVerifier, codeChallenge } = await generatePKCE();
+    const state = generateRandomString(32);
+    savePKCEState(baseUrl, codeVerifier, state);
+
+    const authUrl = buildAuthorizationUrl({
+      authorizationEndpoint: endpoints.authorizationEndpoint,
+      clientId,
+      redirectUri: effectiveRedirectUri,
+      codeChallenge,
+      state,
+      scopes: get().oauth.selectedScopes,
+    });
+
+    // Open in popup
+    const popup = window.open(
+      authUrl,
+      "mcpr_oauth",
+      "width=600,height=700,left=200,top=100"
+    );
+    if (!popup) {
+      // Fallback to redirect
+      window.location.href = authUrl;
+    }
+  },
+
+  handleOAuthCallback: async (code, state) => {
+    const baseUrl = getBaseUrl();
+    const onEvent = get().addOAuthDebugEvent;
+    const effectiveRedirectUri = get().oauth.redirectUri || getRedirectUri();
+
+    // Validate state
+    const pkce = loadPKCEState(baseUrl);
+    if (!pkce.state || pkce.state !== state) {
+      set((s) => ({
+        oauth: {
+          ...s.oauth,
+          status: "error",
+          error: "OAuth state mismatch — possible CSRF attack. Try again.",
+        },
+      }));
+      return;
+    }
+
+    if (!pkce.codeVerifier) {
+      set((s) => ({
+        oauth: {
+          ...s.oauth,
+          status: "error",
+          error: "Missing PKCE code_verifier. Try signing in again.",
+        },
+      }));
+      return;
+    }
+
+    set((s) => ({ oauth: { ...s.oauth, status: "exchanging" } }));
+
+    const metadata = get().oauth.metadata;
+    const endpoints = resolveEndpoints(baseUrl, metadata);
+    const clientId = get().oauth.clientId;
+
+    try {
+      const tokens = await exchangeCode(
+        endpoints.tokenEndpoint,
+        code,
+        effectiveRedirectUri,
+        clientId,
+        pkce.codeVerifier,
+        onEvent
+      );
+
+      saveTokens(baseUrl, tokens, clientId);
+      clearPKCEState(baseUrl);
+
+      const decoded = decodeToken(tokens.access_token);
+
+      set((s) => ({
+        oauth: {
+          ...s.oauth,
+          status: "connected",
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || null,
+          expiresAt: tokens.expires_in
+            ? Date.now() + tokens.expires_in * 1000
+            : null,
+          error: null,
+          decodedToken: decoded,
+        },
+      }));
+
+      // Reload MCP data with new token
+      get().loadAll();
+    } catch (e) {
+      set((s) => ({
+        oauth: {
+          ...s.oauth,
+          status: "error",
+          error: (e as Error).message,
+        },
+      }));
+    }
+  },
+
+  refreshOAuthToken: async () => {
+    const baseUrl = getBaseUrl();
+    const onEvent = get().addOAuthDebugEvent;
+    const { refreshToken, clientId } = get().oauth;
+
+    if (!refreshToken || !clientId) return;
+
+    const metadata = get().oauth.metadata;
+    const endpoints = resolveEndpoints(baseUrl, metadata);
+
+    try {
+      const tokens = await oauthRefresh(
+        endpoints.tokenEndpoint,
+        refreshToken,
+        clientId,
+        onEvent
+      );
+
+      saveTokens(baseUrl, tokens, clientId);
+
+      const decoded = decodeToken(tokens.access_token);
+
+      set((s) => ({
+        oauth: {
+          ...s.oauth,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || s.oauth.refreshToken,
+          expiresAt: tokens.expires_in
+            ? Date.now() + tokens.expires_in * 1000
+            : null,
+          decodedToken: decoded,
+        },
+      }));
+    } catch (e) {
+      set((s) => ({
+        oauth: {
+          ...s.oauth,
+          status: "error",
+          error: (e as Error).message,
+        },
+      }));
+    }
+  },
+
+  signOut: () => {
+    const baseUrl = getBaseUrl();
+    clearTokens(baseUrl);
+    clearPKCEState(baseUrl);
+    set((s) => ({
+      oauth: {
+        ...s.oauth,
+        status: "idle",
+        accessToken: null,
+        refreshToken: null,
+        expiresAt: null,
+        error: null,
+        decodedToken: null,
+      },
+    }));
+    get().loadAll();
+  },
+
+  testOAuthEndpoints: async () => {
+    const baseUrl = getBaseUrl();
+    const onEvent = get().addOAuthDebugEvent;
+    const metadata = get().oauth.metadata;
+    const endpoints = resolveEndpoints(baseUrl, metadata);
+
+    await testEndpoint(
+      `${getAuthBaseUrl(baseUrl)}/.well-known/oauth-authorization-server`,
+      "GET",
+      onEvent
+    );
+    await testEndpoint(endpoints.authorizationEndpoint, "GET", onEvent);
+    await testEndpoint(endpoints.tokenEndpoint, "POST", onEvent);
+    if (endpoints.registrationEndpoint) {
+      await testEndpoint(endpoints.registrationEndpoint, "POST", onEvent);
+    }
+  },
 
   select: (item) => {
     // Destroy previous claude mock
