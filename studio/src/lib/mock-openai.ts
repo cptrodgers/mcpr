@@ -65,6 +65,16 @@ window.openai = {
     window.parent.postMessage({ type: 'mcpr_action', method: 'setOpenInAppUrl', args: opts }, '*');
   }
 };
+
+// Intercept <a> link clicks and route through openExternal API
+document.addEventListener('click', function(e) {
+  var target = e.target;
+  while (target && target.tagName !== 'A') target = target.parentElement;
+  if (target && target.href && target.href !== '#' && !target.href.startsWith('javascript:')) {
+    e.preventDefault();
+    window.openai.openExternal({ url: target.href });
+  }
+}, true);
 <\/script>`;
 }
 

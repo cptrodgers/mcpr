@@ -669,6 +669,19 @@ export const useStore = create<StudioState>((set, get) => ({
         onMessage
       );
       set({ _claudeMock: claudeMock });
+      // Inject link-click interceptor that routes <a> clicks through ui/open-link
+      const linkInterceptScript = `<script>
+document.addEventListener('click', function(e) {
+  var target = e.target;
+  while (target && target.tagName !== 'A') target = target.parentElement;
+  if (target && target.href && target.href !== '#' && !target.href.startsWith('javascript:')) {
+    e.preventDefault();
+    var id = '__link_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    window.parent.postMessage({ jsonrpc: '2.0', id: id, method: 'ui/open-link', params: { url: target.href } }, '*');
+  }
+}, true);
+<\/script>`;
+      html = html.replace(/<head([^>]*)>/i, `<head$1>${linkInterceptScript}`);
       iframe.srcdoc = html;
     }
   },

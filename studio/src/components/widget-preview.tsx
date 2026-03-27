@@ -571,6 +571,11 @@ export function WidgetPreview() {
       if (data.type === "mcpr_action") {
         logAction(data.method, data.args);
 
+        // Open external URLs (OpenAI path)
+        if (data.method === "openExternal" && data.args?.url) {
+          window.open(data.args.url, "_blank", "noopener,noreferrer");
+        }
+
         // Actually call backend MCP server for callTool actions (OpenAI path)
         if (data.method === "callTool" && data.args?.name && data.callId) {
           const iframe = useStore.getState()._iframeRef;

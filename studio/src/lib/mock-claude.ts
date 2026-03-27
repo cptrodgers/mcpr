@@ -153,6 +153,10 @@ export function createClaudeMock(
         case "ui/open-link":
         case "ui/openLink":
           onAction("openLink", params);
+          {
+            const url = (params as { url?: string }).url;
+            if (url) window.open(url, "_blank", "noopener,noreferrer");
+          }
           sendResponse(id, {});
           break;
 
