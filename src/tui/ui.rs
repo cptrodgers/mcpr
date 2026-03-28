@@ -3,12 +3,14 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Tabs,
 };
 
-use super::state::{ConnectionStatus, SharedTuiState};
+use crate::session::MemorySessionStore;
 
-pub fn render(frame: &mut Frame, state: &SharedTuiState) {
+use super::state::{ConnectionStatus, SharedTuiState, Tab};
+
+pub fn render(frame: &mut Frame, state: &SharedTuiState, sessions: &MemorySessionStore) {
     let s = state.lock().unwrap();
 
     // Size left panel to fit the longest URL + label padding (10) + border (2) + margin (2)
@@ -26,7 +28,31 @@ pub fn render(frame: &mut Frame, state: &SharedTuiState) {
         .split(frame.area());
 
     render_info_panel(frame, chunks[0], &s);
-    render_log_panel(frame, chunks[1], &s);
+
+    // Right panel: tab bar + content
+    let right_chunks =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(chunks[1]);
+
+    let tab_titles = vec!["Requests", "Sessions"];
+    let selected = match s.active_tab {
+        Tab::Requests => 0,
+        Tab::Sessions => 1,
+    };
+    let tabs = Tabs::new(tab_titles)
+        .select(selected)
+        .style(Style::default().fg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider("│");
+    frame.render_widget(tabs, right_chunks[0]);
+
+    match s.active_tab {
+        Tab::Requests => render_log_panel(frame, right_chunks[1], &s),
+        Tab::Sessions => render_sessions_panel(frame, right_chunks[1], sessions, &s),
+    }
 }
 
 fn status_style(status: ConnectionStatus) -> (Color, &'static str) {
@@ -150,9 +176,24 @@ fn render_info_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) 
     lines.extend([
         Line::from(""),
         Line::from(Span::styled(
-            "  q quit  ↑↓ scroll",
+            "  q quit  ↑↓ scroll  tab switch",
             Style::default().fg(Color::DarkGray),
         )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  Star us ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "github.com/cptrodgers/mcpr",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ]);
 
     let paragraph = Paragraph::new(lines).block(block);
@@ -302,6 +343,291 @@ fn render_log_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) {
     frame.render_widget(paragraph, area);
 
     // Scrollbar
+    if total > visible_height {
+        let mut scrollbar_state =
+            ScrollbarState::new(total.saturating_sub(visible_height)).position(scroll as usize);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None),
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
+}
+
+fn render_sessions_panel(
+    frame: &mut Frame,
+    area: Rect,
+    sessions: &MemorySessionStore,
+    s: &super::state::TuiState,
+) {
+    let session_list = sessions.list_sync();
+
+    if session_list.is_empty() {
+        let block = Block::default()
+            .title(" Sessions ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No active sessions",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Sessions appear when an MCP client sends an initialize request.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    // Split: session list (top) + detail (bottom)
+    let chunks = Layout::vertical([
+        Constraint::Length(session_list.len() as u16 + 2),
+        Constraint::Min(6),
+    ])
+    .split(area);
+
+    // --- Top: session list with cursor ---
+    let list_block = Block::default()
+        .title(" Sessions ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let selected = s.selected_session.min(session_list.len().saturating_sub(1));
+
+    let list_lines: Vec<Line> = session_list
+        .iter()
+        .enumerate()
+        .map(|(i, session)| {
+            let is_selected = i == selected;
+            let state_color = session_state_color(&session.state);
+            let state_label = session_state_label(&session.state);
+
+            let marker = if is_selected { "▸ " } else { "  " };
+            let id_style = if is_selected {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let client_str = session
+                .client_info
+                .as_ref()
+                .map(|c| {
+                    let v = c
+                        .version
+                        .as_deref()
+                        .map(|v| format!(" v{v}"))
+                        .unwrap_or_default();
+                    format!("  {}{v}", c.name)
+                })
+                .unwrap_or_default();
+
+            Line::from(vec![
+                Span::styled(marker, Style::default().fg(Color::Cyan)),
+                Span::styled(session.id.clone(), id_style),
+                Span::raw("  "),
+                Span::styled(
+                    state_label,
+                    Style::default()
+                        .fg(state_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(client_str, Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(list_lines).block(list_block);
+    frame.render_widget(paragraph, chunks[0]);
+
+    // --- Bottom: selected session detail + its requests ---
+    let session = &session_list[selected];
+    render_session_detail(frame, chunks[1], session, s);
+}
+
+fn session_state_color(state: &crate::session::SessionState) -> Color {
+    match state {
+        crate::session::SessionState::Created => Color::Yellow,
+        crate::session::SessionState::Initialized => Color::Cyan,
+        crate::session::SessionState::Active => Color::Green,
+        crate::session::SessionState::Closed => Color::Red,
+    }
+}
+
+fn session_state_label(state: &crate::session::SessionState) -> &'static str {
+    match state {
+        crate::session::SessionState::Created => "CREATED",
+        crate::session::SessionState::Initialized => "INITIALIZED",
+        crate::session::SessionState::Active => "ACTIVE",
+        crate::session::SessionState::Closed => "CLOSED",
+    }
+}
+
+fn render_session_detail(
+    frame: &mut Frame,
+    area: Rect,
+    session: &crate::session::SessionInfo,
+    s: &super::state::TuiState,
+) {
+    let block = Block::default()
+        .title(format!(" {} ", session.id))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(area);
+    let visible_height = inner.height as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Session info header
+    let state_color = session_state_color(&session.state);
+    let state_label = session_state_label(&session.state);
+
+    lines.push(Line::from(vec![
+        Span::styled("  State     ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            state_label,
+            Style::default()
+                .fg(state_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    if let Some(ref client) = session.client_info {
+        let version = client
+            .version
+            .as_deref()
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::styled("  Client    ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}{}", client.name, version)),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("  Created   ", Style::default().fg(Color::DarkGray)),
+        Span::raw(session.created_at.format("%H:%M:%S").to_string()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Active    ", Style::default().fg(Color::DarkGray)),
+        Span::raw(session.last_active.format("%H:%M:%S").to_string()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Requests  ", Style::default().fg(Color::DarkGray)),
+        Span::raw(session.request_count.to_string()),
+    ]));
+
+    // Separator
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ── Requests ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // Filter log entries for this session
+    let session_entries: Vec<&super::state::LogEntry> = s
+        .log_entries
+        .iter()
+        .filter(|e| e.session_id.as_deref() == Some(&session.id))
+        .collect();
+
+    if session_entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no requests logged yet)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for entry in &session_entries {
+            let status_color = if entry.status < 300 {
+                Color::Green
+            } else if entry.status < 400 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+
+            let method_color = match entry.method.as_str() {
+                "POST" => Color::Cyan,
+                "GET" => Color::Green,
+                "DELETE" => Color::Red,
+                _ => Color::White,
+            };
+
+            let mut spans = vec![
+                Span::styled(
+                    format!("  {} ", entry.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{:<5}", entry.method),
+                    Style::default()
+                        .fg(method_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<4}", entry.status),
+                    Style::default().fg(status_color),
+                ),
+            ];
+
+            // Duration
+            if let Some(total) = entry.duration_ms {
+                spans.push(Span::styled(
+                    format!("{:>5} ", format_duration(total)),
+                    Style::default()
+                        .fg(duration_color(total))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            // Label
+            if let Some(ref mcp) = entry.mcp_method {
+                spans.push(Span::styled(
+                    mcp.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::raw(entry.path.clone()));
+            }
+
+            if !entry.note.is_empty() {
+                spans.push(Span::styled(
+                    format!(" {}", entry.note),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            lines.push(Line::from(spans));
+        }
+    }
+
+    let total = lines.len();
+    let scroll = if total > visible_height {
+        let max_scroll = total.saturating_sub(visible_height) as u16;
+        s.session_detail_scroll.min(max_scroll)
+    } else {
+        0
+    };
+
+    let paragraph = Paragraph::new(lines).block(block).scroll((scroll, 0));
+    frame.render_widget(paragraph, area);
+
+    // Scrollbar for detail
     if total > visible_height {
         let mut scrollbar_state =
             ScrollbarState::new(total.saturating_sub(visible_height)).position(scroll as usize);
