@@ -1,0 +1,574 @@
+/// JSON-RPC 2.0 parsing and MCP method classification.
+///
+/// Provides typed structs for JSON-RPC 2.0 messages and MCP-specific
+/// method detection. Used by the proxy to classify incoming requests
+/// and log which MCP function is being called.
+use serde_json::Value;
+
+// ── JSON-RPC 2.0 types ──
+
+/// A parsed JSON-RPC 2.0 id (number or string).
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsonRpcId {
+    Number(i64),
+    String(String),
+}
+
+impl std::fmt::Display for JsonRpcId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Number(n) => write!(f, "{n}"),
+            Self::String(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+/// A classified JSON-RPC 2.0 message.
+// Fields used by tests now; proxy.rs will consume them for batch handling + 202 notifications.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum JsonRpcMessage {
+    /// Has `method` + `id` → expects a response.
+    Request(JsonRpcRequest),
+    /// Has `method`, no `id` → fire-and-forget.
+    Notification(JsonRpcNotification),
+    /// Has `id` + `result`/`error` → reply to a prior request.
+    Response(JsonRpcResponse),
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct JsonRpcRequest {
+    pub id: JsonRpcId,
+    pub method: String,
+    pub params: Option<Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct JsonRpcNotification {
+    pub method: String,
+    pub params: Option<Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct JsonRpcResponse {
+    pub id: JsonRpcId,
+    pub result: Option<Value>,
+    pub error: Option<JsonRpcError>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct JsonRpcError {
+    pub code: i64,
+    pub message: String,
+    pub data: Option<Value>,
+}
+
+// ── MCP method classification ──
+
+/// Known MCP methods — lets the proxy know exactly what function is being called.
+#[derive(Debug, Clone, PartialEq)]
+pub enum McpMethod {
+    Initialize,
+    Initialized,
+    Ping,
+    ToolsList,
+    ToolsCall,
+    ResourcesList,
+    ResourcesRead,
+    ResourcesSubscribe,
+    ResourcesUnsubscribe,
+    PromptsList,
+    PromptsGet,
+    LoggingSetLevel,
+    CompletionComplete,
+    /// Any `notifications/*` we don't have a specific variant for.
+    Notification(String),
+    /// Anything else.
+    Unknown(String),
+}
+
+// MCP method name constants — single source of truth for string matching.
+pub const INITIALIZE: &str = "initialize";
+pub const INITIALIZED: &str = "notifications/initialized";
+pub const PING: &str = "ping";
+pub const TOOLS_LIST: &str = "tools/list";
+pub const TOOLS_CALL: &str = "tools/call";
+pub const RESOURCES_LIST: &str = "resources/list";
+pub const RESOURCES_READ: &str = "resources/read";
+pub const RESOURCES_SUBSCRIBE: &str = "resources/subscribe";
+pub const RESOURCES_UNSUBSCRIBE: &str = "resources/unsubscribe";
+pub const PROMPTS_LIST: &str = "prompts/list";
+pub const PROMPTS_GET: &str = "prompts/get";
+pub const LOGGING_SET_LEVEL: &str = "logging/setLevel";
+pub const COMPLETION_COMPLETE: &str = "completion/complete";
+
+impl McpMethod {
+    pub fn parse(method: &str) -> Self {
+        match method {
+            INITIALIZE => Self::Initialize,
+            INITIALIZED => Self::Initialized,
+            PING => Self::Ping,
+            TOOLS_LIST => Self::ToolsList,
+            TOOLS_CALL => Self::ToolsCall,
+            RESOURCES_LIST => Self::ResourcesList,
+            RESOURCES_READ => Self::ResourcesRead,
+            RESOURCES_SUBSCRIBE => Self::ResourcesSubscribe,
+            RESOURCES_UNSUBSCRIBE => Self::ResourcesUnsubscribe,
+            PROMPTS_LIST => Self::PromptsList,
+            PROMPTS_GET => Self::PromptsGet,
+            LOGGING_SET_LEVEL => Self::LoggingSetLevel,
+            COMPLETION_COMPLETE => Self::CompletionComplete,
+            m if m.starts_with("notifications/") => Self::Notification(m.to_string()),
+            m => Self::Unknown(m.to_string()),
+        }
+    }
+
+    /// Short label for logging (e.g. "tools/call", "initialize").
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Initialize => INITIALIZE,
+            Self::Initialized => INITIALIZED,
+            Self::Ping => PING,
+            Self::ToolsList => TOOLS_LIST,
+            Self::ToolsCall => TOOLS_CALL,
+            Self::ResourcesList => RESOURCES_LIST,
+            Self::ResourcesRead => RESOURCES_READ,
+            Self::ResourcesSubscribe => RESOURCES_SUBSCRIBE,
+            Self::ResourcesUnsubscribe => RESOURCES_UNSUBSCRIBE,
+            Self::PromptsList => PROMPTS_LIST,
+            Self::PromptsGet => PROMPTS_GET,
+            Self::LoggingSetLevel => LOGGING_SET_LEVEL,
+            Self::CompletionComplete => COMPLETION_COMPLETE,
+            Self::Notification(m) => m.as_str(),
+            Self::Unknown(m) => m.as_str(),
+        }
+    }
+}
+
+// ── Parsing ──
+
+/// Parse a JSON-RPC id value.
+fn parse_id(value: &Value) -> Option<JsonRpcId> {
+    match value {
+        Value::Number(n) => n.as_i64().map(JsonRpcId::Number),
+        Value::String(s) => Some(JsonRpcId::String(s.clone())),
+        _ => None,
+    }
+}
+
+/// Parse a JSON-RPC error object.
+fn parse_error(value: &Value) -> Option<JsonRpcError> {
+    let obj = value.as_object()?;
+    Some(JsonRpcError {
+        code: obj.get("code")?.as_i64()?,
+        message: obj.get("message")?.as_str()?.to_string(),
+        data: obj.get("data").cloned(),
+    })
+}
+
+/// Parse a single JSON value as a JSON-RPC 2.0 message.
+/// Returns `None` if it doesn't have `"jsonrpc": "2.0"`.
+pub fn parse_message(value: &Value) -> Option<JsonRpcMessage> {
+    let obj = value.as_object()?;
+
+    // Must be JSON-RPC 2.0
+    if obj.get("jsonrpc")?.as_str()? != "2.0" {
+        return None;
+    }
+
+    let id = obj.get("id").and_then(parse_id);
+    let method = obj.get("method").and_then(|m| m.as_str()).map(String::from);
+    let params = obj.get("params").cloned();
+
+    match (method, id) {
+        // Has method + id → Request
+        (Some(method), Some(id)) => Some(JsonRpcMessage::Request(JsonRpcRequest {
+            id,
+            method,
+            params,
+        })),
+        // Has method, no id → Notification
+        (Some(method), None) => Some(JsonRpcMessage::Notification(JsonRpcNotification {
+            method,
+            params,
+        })),
+        // No method, has id → Response
+        (None, Some(id)) => {
+            let result = obj.get("result").cloned();
+            let error = obj.get("error").and_then(parse_error);
+            Some(JsonRpcMessage::Response(JsonRpcResponse {
+                id,
+                result,
+                error,
+            }))
+        }
+        // No method, no id → invalid
+        (None, None) => None,
+    }
+}
+
+/// Result of parsing a POST body as JSON-RPC 2.0.
+#[derive(Debug)]
+pub struct ParsedBody {
+    pub messages: Vec<JsonRpcMessage>,
+    pub is_batch: bool,
+}
+
+impl ParsedBody {
+    /// Get the method string from the first request or notification.
+    /// Falls back to "unknown" if the batch contains only responses.
+    pub fn method_str(&self) -> &str {
+        self.messages
+            .iter()
+            .find_map(|m| match m {
+                JsonRpcMessage::Request(r) => Some(r.method.as_str()),
+                JsonRpcMessage::Notification(n) => Some(n.method.as_str()),
+                _ => None,
+            })
+            .unwrap_or("unknown")
+    }
+
+    /// Get the MCP method classification from the first request/notification.
+    pub fn mcp_method(&self) -> McpMethod {
+        McpMethod::parse(self.method_str())
+    }
+
+    /// Get the id of the first request (if any).
+    #[allow(dead_code)] // needed for batch response routing
+    pub fn first_request_id(&self) -> Option<&JsonRpcId> {
+        self.messages.iter().find_map(|m| match m {
+            JsonRpcMessage::Request(r) => Some(&r.id),
+            _ => None,
+        })
+    }
+
+    /// True if every message is a notification (no id, no response expected).
+    #[allow(dead_code)] // needed for HTTP 202 handling per MCP spec
+    pub fn is_notification_only(&self) -> bool {
+        self.messages
+            .iter()
+            .all(|m| matches!(m, JsonRpcMessage::Notification(_)))
+    }
+
+    /// Get the raw params from the first request/notification.
+    #[allow(dead_code)] // needed for request interception (e.g. resources/read params)
+    pub fn first_params(&self) -> Option<&Value> {
+        self.messages.iter().find_map(|m| match m {
+            JsonRpcMessage::Request(r) => r.params.as_ref(),
+            JsonRpcMessage::Notification(n) => n.params.as_ref(),
+            _ => None,
+        })
+    }
+}
+
+/// Parse a POST body as JSON-RPC 2.0 — single message or batch.
+/// Returns `None` if the body is not valid JSON-RPC 2.0.
+pub fn parse_body(body: &[u8]) -> Option<ParsedBody> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+
+    if let Some(arr) = value.as_array() {
+        // Batch: array of JSON-RPC messages
+        let messages: Vec<_> = arr.iter().filter_map(parse_message).collect();
+        if messages.is_empty() {
+            return None;
+        }
+        Some(ParsedBody {
+            messages,
+            is_batch: true,
+        })
+    } else {
+        // Single message
+        let msg = parse_message(&value)?;
+        Some(ParsedBody {
+            messages: vec![msg],
+            is_batch: false,
+        })
+    }
+}
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── parse_message ──
+
+    #[test]
+    fn parse_request() {
+        let val = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_weather"}});
+        let msg = parse_message(&val).unwrap();
+        match msg {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, JsonRpcId::Number(1));
+                assert_eq!(r.method, "tools/call");
+                assert!(r.params.is_some());
+            }
+            _ => panic!("expected Request"),
+        }
+    }
+
+    #[test]
+    fn parse_request_string_id() {
+        let val = json!({"jsonrpc": "2.0", "id": "abc-123", "method": "initialize"});
+        let msg = parse_message(&val).unwrap();
+        match msg {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, JsonRpcId::String("abc-123".into()));
+                assert_eq!(r.method, "initialize");
+            }
+            _ => panic!("expected Request"),
+        }
+    }
+
+    #[test]
+    fn parse_notification() {
+        let val = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        let msg = parse_message(&val).unwrap();
+        match msg {
+            JsonRpcMessage::Notification(n) => {
+                assert_eq!(n.method, "notifications/initialized");
+                assert!(n.params.is_none());
+            }
+            _ => panic!("expected Notification"),
+        }
+    }
+
+    #[test]
+    fn parse_response_result() {
+        let val = json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": []}});
+        let msg = parse_message(&val).unwrap();
+        match msg {
+            JsonRpcMessage::Response(r) => {
+                assert_eq!(r.id, JsonRpcId::Number(1));
+                assert!(r.result.is_some());
+                assert!(r.error.is_none());
+            }
+            _ => panic!("expected Response"),
+        }
+    }
+
+    #[test]
+    fn parse_response_error() {
+        let val = json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "Method not found"}});
+        let msg = parse_message(&val).unwrap();
+        match msg {
+            JsonRpcMessage::Response(r) => {
+                assert_eq!(r.id, JsonRpcId::Number(1));
+                assert!(r.result.is_none());
+                let err = r.error.unwrap();
+                assert_eq!(err.code, -32601);
+                assert_eq!(err.message, "Method not found");
+            }
+            _ => panic!("expected Response"),
+        }
+    }
+
+    #[test]
+    fn reject_wrong_jsonrpc_version() {
+        let val = json!({"jsonrpc": "1.0", "id": 1, "method": "test"});
+        assert!(parse_message(&val).is_none());
+    }
+
+    #[test]
+    fn reject_missing_jsonrpc() {
+        let val = json!({"id": 1, "method": "test"});
+        assert!(parse_message(&val).is_none());
+    }
+
+    #[test]
+    fn reject_no_method_no_id() {
+        let val = json!({"jsonrpc": "2.0"});
+        assert!(parse_message(&val).is_none());
+    }
+
+    #[test]
+    fn reject_non_object() {
+        let val = json!("hello");
+        assert!(parse_message(&val).is_none());
+    }
+
+    #[test]
+    fn reject_oauth_register_body() {
+        // OAuth dynamic client registration — valid JSON, but not JSON-RPC
+        let val = json!({
+            "client_name": "My App",
+            "redirect_uris": ["https://example.com/callback"],
+            "grant_types": ["authorization_code"]
+        });
+        assert!(parse_message(&val).is_none());
+    }
+
+    // ── parse_body ──
+
+    #[test]
+    fn parse_single_request() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let parsed = parse_body(body).unwrap();
+        assert!(!parsed.is_batch);
+        assert_eq!(parsed.messages.len(), 1);
+        assert_eq!(parsed.method_str(), "tools/list");
+        assert_eq!(parsed.mcp_method(), McpMethod::ToolsList);
+    }
+
+    #[test]
+    fn parse_batch_requests() {
+        let body = br#"[
+            {"jsonrpc":"2.0","id":1,"method":"tools/list"},
+            {"jsonrpc":"2.0","id":2,"method":"resources/list"}
+        ]"#;
+        let parsed = parse_body(body).unwrap();
+        assert!(parsed.is_batch);
+        assert_eq!(parsed.messages.len(), 2);
+        // method_str returns first request's method
+        assert_eq!(parsed.method_str(), "tools/list");
+    }
+
+    #[test]
+    fn parse_notification_only() {
+        let body = br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let parsed = parse_body(body).unwrap();
+        assert!(parsed.is_notification_only());
+        assert_eq!(parsed.mcp_method(), McpMethod::Initialized);
+    }
+
+    #[test]
+    fn parse_mixed_batch() {
+        let body = br#"[
+            {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}},
+            {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_weather"}}
+        ]"#;
+        let parsed = parse_body(body).unwrap();
+        assert!(parsed.is_batch);
+        assert!(!parsed.is_notification_only());
+        // first_request_id skips the notification, finds the request
+        assert_eq!(parsed.first_request_id(), Some(&JsonRpcId::Number(2)));
+    }
+
+    #[test]
+    fn reject_empty_batch() {
+        let body = b"[]";
+        assert!(parse_body(body).is_none());
+    }
+
+    #[test]
+    fn reject_invalid_json() {
+        assert!(parse_body(b"not json").is_none());
+    }
+
+    #[test]
+    fn reject_non_jsonrpc_json() {
+        // Valid JSON but not JSON-RPC — e.g. an OAuth token request body
+        let body = br#"{"grant_type":"client_credentials","client_id":"abc"}"#;
+        assert!(parse_body(body).is_none());
+    }
+
+    #[test]
+    fn reject_batch_of_non_jsonrpc() {
+        let body = br#"[{"foo":"bar"},{"baz":1}]"#;
+        assert!(parse_body(body).is_none());
+    }
+
+    // ── McpMethod ──
+
+    #[test]
+    fn mcp_method_known() {
+        assert_eq!(McpMethod::parse("initialize"), McpMethod::Initialize);
+        assert_eq!(McpMethod::parse("tools/call"), McpMethod::ToolsCall);
+        assert_eq!(McpMethod::parse("tools/list"), McpMethod::ToolsList);
+        assert_eq!(McpMethod::parse("resources/read"), McpMethod::ResourcesRead);
+        assert_eq!(McpMethod::parse("resources/list"), McpMethod::ResourcesList);
+        assert_eq!(McpMethod::parse("prompts/list"), McpMethod::PromptsList);
+        assert_eq!(McpMethod::parse("prompts/get"), McpMethod::PromptsGet);
+        assert_eq!(McpMethod::parse("ping"), McpMethod::Ping);
+        assert_eq!(
+            McpMethod::parse("logging/setLevel"),
+            McpMethod::LoggingSetLevel
+        );
+        assert_eq!(
+            McpMethod::parse("completion/complete"),
+            McpMethod::CompletionComplete
+        );
+    }
+
+    #[test]
+    fn mcp_method_notification() {
+        assert_eq!(
+            McpMethod::parse("notifications/initialized"),
+            McpMethod::Initialized
+        );
+        assert_eq!(
+            McpMethod::parse("notifications/cancelled"),
+            McpMethod::Notification("notifications/cancelled".into())
+        );
+        assert_eq!(
+            McpMethod::parse("notifications/resources/updated"),
+            McpMethod::Notification("notifications/resources/updated".into())
+        );
+    }
+
+    #[test]
+    fn mcp_method_unknown() {
+        assert_eq!(
+            McpMethod::parse("custom/method"),
+            McpMethod::Unknown("custom/method".into())
+        );
+    }
+
+    #[test]
+    fn mcp_method_as_str_roundtrip() {
+        let methods = [
+            "initialize",
+            "notifications/initialized",
+            "ping",
+            "tools/list",
+            "tools/call",
+            "resources/list",
+            "resources/read",
+            "prompts/list",
+            "prompts/get",
+            "logging/setLevel",
+            "completion/complete",
+        ];
+        for m in methods {
+            assert_eq!(McpMethod::parse(m).as_str(), m);
+        }
+    }
+
+    // ── JsonRpcId display ──
+
+    #[test]
+    fn id_display() {
+        assert_eq!(JsonRpcId::Number(42).to_string(), "42");
+        assert_eq!(JsonRpcId::String("abc".into()).to_string(), "abc");
+    }
+
+    // ── ParsedBody helpers ──
+
+    #[test]
+    fn first_params_from_request() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo"}}"#;
+        let parsed = parse_body(body).unwrap();
+        let params = parsed.first_params().unwrap();
+        assert_eq!(params["name"], "echo");
+    }
+
+    #[test]
+    fn first_params_none_for_response() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
+        let parsed = parse_body(body).unwrap();
+        assert!(parsed.first_params().is_none());
+    }
+
+    #[test]
+    fn method_str_defaults_to_unknown_for_responses() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#;
+        let parsed = parse_body(body).unwrap();
+        assert_eq!(parsed.method_str(), "unknown");
+    }
+}

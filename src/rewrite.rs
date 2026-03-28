@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::config::CspMode;
+use crate::jsonrpc;
 
 #[derive(Clone)]
 pub struct RewriteConfig {
@@ -15,7 +16,7 @@ pub struct RewriteConfig {
 /// Phase 1: inject proxy URL into known metadata fields (no dynamic learning).
 pub fn rewrite_response(method: &str, body: &mut Value, config: &RewriteConfig) {
     match method {
-        "tools/list" => {
+        jsonrpc::TOOLS_LIST => {
             if let Some(tools) = body
                 .get_mut("result")
                 .and_then(|r| r.get_mut("tools"))
@@ -28,13 +29,13 @@ pub fn rewrite_response(method: &str, body: &mut Value, config: &RewriteConfig) 
                 }
             }
         }
-        "tools/call" => {
+        jsonrpc::TOOLS_CALL => {
             // _meta is at result.meta in the JSON-RPC response
             if let Some(meta) = body.get_mut("result").and_then(|r| r.get_mut("meta")) {
                 rewrite_widget_meta(meta, config);
             }
         }
-        "resources/list" => {
+        jsonrpc::RESOURCES_LIST => {
             if let Some(resources) = body
                 .get_mut("result")
                 .and_then(|r| r.get_mut("resources"))
@@ -47,7 +48,7 @@ pub fn rewrite_response(method: &str, body: &mut Value, config: &RewriteConfig) 
                 }
             }
         }
-        "resources/read" => {
+        jsonrpc::RESOURCES_READ => {
             if let Some(contents) = body
                 .get_mut("result")
                 .and_then(|r| r.get_mut("contents"))
