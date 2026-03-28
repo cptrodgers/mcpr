@@ -67,6 +67,26 @@ Without Studio, the only way to test widgets is deploying to a public URL and op
 
 ![mcpr Studio](docs/images/mcpr-app-studio.png)
 
+### Protocol-Aware Debugging
+
+mcpr understands MCP at the protocol level — not just HTTP.
+
+Every request is parsed as JSON-RPC 2.0, classified by MCP method, and logged with full context: which tool was called, how long the upstream took, how much overhead the proxy added, and whether the response contained an error.
+
+```
+ 21:23:11 POST 200  8.0KB  16ms  15ms↑  1ms↓ initialize → http://localhost:9000/mcp
+ 21:23:11 POST 200 73.6KB  11ms   7ms↑  4ms↓ tools/list → http://localhost:9000/mcp
+ 21:23:11 POST 200   147B   8ms   8ms↑  0ms↓ tools/call get_weather → http://localhost:9000/mcp
+ 21:23:11 POST 200   637B   4ms   4ms↑  0ms↓ resources/read ui://widget/clock.html
+ 21:23:11 POST 200   147B   8ms   8ms↑  0ms↓ tools/call search [-32602 Invalid params] → ...
+```
+
+- **MCP method detection** — `initialize`, `tools/call`, `resources/read`, `prompts/get`, etc.
+- **Tool & resource names** — see which tool was called or which resource was read
+- **Timing breakdown** — total round-trip, upstream server time (↑), proxy overhead (↓)
+- **JSON-RPC errors** — error codes and messages from the MCP server shown inline
+- **Session tracking** — track MCP sessions with client info, state, and request history
+
 ### Edge Config
 
 Like Nginx or Caddy for your MCP app — move environment-specific config out of your application and into the proxy layer.
@@ -81,7 +101,7 @@ AI clients require CSP headers, widget domains, and OAuth URLs tailored to each 
 
 | | ngrok | Cloudflare Tunnel | MCPJam Inspector | mcpr |
 |---|---|---|---|---|
-| **MCP protocol awareness** | None — treats MCP as opaque HTTP | None | Yes — full JSON-RPC inspection | Parses JSON-RPC, inspects tool calls |
+| **MCP protocol awareness** | None — treats MCP as opaque HTTP | None | Yes — full JSON-RPC inspection | Full JSON-RPC 2.0 parsing — method classification, tool names, error codes, session tracking, timing breakdown |
 | **Multi-service behind one URL** | Separate URLs per service. Path routing needs paid plan. | Possible with Workers config | No — inspector only, not a proxy | Auto-detects MCP requests vs widget requests, merges behind one URL |
 | **Tunnel to public HTTPS** | Yes | Yes | No | Yes, one command |
 | **Widget testing** | No | No | Yes — emulates ChatGPT & Claude widget APIs | Yes — Studio emulates both platforms with CSP enforcement |
