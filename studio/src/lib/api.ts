@@ -75,6 +75,29 @@ let rpcId = 0;
 let sessionId: string | null = null;
 let initPromise: Promise<void> | null = null;
 
+function getCustomHeaders(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem("mcpr_studio_custom_headers");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
+        const result: Record<string, string> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === "string") result[k] = v;
+        }
+        return result;
+      }
+    }
+  } catch {
+    /* invalid JSON — ignore */
+  }
+  return {};
+}
+
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -83,6 +106,8 @@ function buildHeaders(): Record<string, string> {
   const token = getActiveToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   if (sessionId) headers["mcp-session-id"] = sessionId;
+  // Merge custom headers (can override anything above)
+  Object.assign(headers, getCustomHeaders());
   return headers;
 }
 
