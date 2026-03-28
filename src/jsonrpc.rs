@@ -67,6 +67,61 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
+// ── JSON-RPC 2.0 error codes (spec: https://www.jsonrpc.org/specification#error_object) ──
+
+// Used by tests now; proxy.rs will use for returning spec-compliant errors (ACL, validation).
+#[allow(dead_code)]
+pub mod error_code {
+    /// Invalid JSON was received.
+    pub const PARSE_ERROR: i64 = -32700;
+    /// The JSON sent is not a valid Request object.
+    pub const INVALID_REQUEST: i64 = -32600;
+    /// The method does not exist / is not available.
+    pub const METHOD_NOT_FOUND: i64 = -32601;
+    /// Invalid method parameter(s).
+    pub const INVALID_PARAMS: i64 = -32602;
+    /// Internal JSON-RPC error.
+    pub const INTERNAL_ERROR: i64 = -32603;
+
+    /// Short label for known error codes.
+    pub fn label(code: i64) -> &'static str {
+        match code {
+            PARSE_ERROR => "Parse error",
+            INVALID_REQUEST => "Invalid request",
+            METHOD_NOT_FOUND => "Method not found",
+            INVALID_PARAMS => "Invalid params",
+            INTERNAL_ERROR => "Internal error",
+            -32099..=-32000 => "Server error",
+            _ => "Unknown error",
+        }
+    }
+}
+
+// ── JSON-RPC error response builder ──
+
+/// Build a JSON-RPC 2.0 error response as bytes.
+/// `id` can be a request id or `Value::Null` if the request id couldn't be parsed.
+#[allow(dead_code)] // needed for Phase 3 ACL (rejecting forbidden methods)
+pub fn error_response(id: &Value, code: i64, message: &str) -> Vec<u8> {
+    let resp = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message,
+        }
+    });
+    serde_json::to_vec(&resp).unwrap_or_default()
+}
+
+/// Extract the JSON-RPC error code from a response body (if it's an error response).
+pub fn extract_error_code(body: &Value) -> Option<(i64, &str)> {
+    let err = body.get("error")?;
+    let code = err.get("code")?.as_i64()?;
+    let message = err.get("message")?.as_str()?;
+    Some((code, message))
+}
+
 // ── MCP method classification ──
 
 /// Known MCP methods — lets the proxy know exactly what function is being called.
@@ -254,8 +309,22 @@ impl ParsedBody {
             .all(|m| matches!(m, JsonRpcMessage::Notification(_)))
     }
 
+    /// Extract a short detail string for logging:
+    /// - tools/call → tool name (params.name)
+    /// - resources/read → resource URI (params.uri)
+    /// - prompts/get → prompt name (params.name)
+    pub fn detail(&self) -> Option<String> {
+        let params = self.first_params()?;
+        let method = self.mcp_method();
+        match method {
+            McpMethod::ToolsCall => params.get("name")?.as_str().map(String::from),
+            McpMethod::ResourcesRead => params.get("uri")?.as_str().map(String::from),
+            McpMethod::PromptsGet => params.get("name")?.as_str().map(String::from),
+            _ => None,
+        }
+    }
+
     /// Get the raw params from the first request/notification.
-    #[allow(dead_code)] // needed for request interception (e.g. resources/read params)
     pub fn first_params(&self) -> Option<&Value> {
         self.messages.iter().find_map(|m| match m {
             JsonRpcMessage::Request(r) => r.params.as_ref(),
@@ -570,5 +639,87 @@ mod tests {
         let body = br#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#;
         let parsed = parse_body(body).unwrap();
         assert_eq!(parsed.method_str(), "unknown");
+    }
+
+    // ── ParsedBody::detail ──
+
+    #[test]
+    fn detail_tools_call() {
+        let body =
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_weather"}}"#;
+        let parsed = parse_body(body).unwrap();
+        assert_eq!(parsed.detail().as_deref(), Some("get_weather"));
+    }
+
+    #[test]
+    fn detail_resources_read() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ui://widget/clock.html"}}"#;
+        let parsed = parse_body(body).unwrap();
+        assert_eq!(parsed.detail().as_deref(), Some("ui://widget/clock.html"));
+    }
+
+    #[test]
+    fn detail_none_for_tools_list() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let parsed = parse_body(body).unwrap();
+        assert!(parsed.detail().is_none());
+    }
+
+    // ── error_code ──
+
+    #[test]
+    fn error_code_labels() {
+        assert_eq!(error_code::label(error_code::PARSE_ERROR), "Parse error");
+        assert_eq!(
+            error_code::label(error_code::METHOD_NOT_FOUND),
+            "Method not found"
+        );
+        assert_eq!(
+            error_code::label(error_code::INVALID_PARAMS),
+            "Invalid params"
+        );
+        assert_eq!(
+            error_code::label(error_code::INTERNAL_ERROR),
+            "Internal error"
+        );
+        assert_eq!(error_code::label(-32000), "Server error");
+        assert_eq!(error_code::label(-32099), "Server error");
+        assert_eq!(error_code::label(42), "Unknown error");
+    }
+
+    // ── error_response ──
+
+    #[test]
+    fn error_response_with_numeric_id() {
+        let body = error_response(&json!(1), error_code::METHOD_NOT_FOUND, "Method not found");
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        assert_eq!(parsed["id"], 1);
+        assert_eq!(parsed["error"]["code"], -32601);
+        assert_eq!(parsed["error"]["message"], "Method not found");
+    }
+
+    #[test]
+    fn error_response_with_null_id() {
+        let body = error_response(&Value::Null, error_code::PARSE_ERROR, "Parse error");
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["id"], Value::Null);
+        assert_eq!(parsed["error"]["code"], -32700);
+    }
+
+    // ── extract_error_code ──
+
+    #[test]
+    fn extract_error_from_response() {
+        let val = json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "Method not found"}});
+        let (code, msg) = extract_error_code(&val).unwrap();
+        assert_eq!(code, -32601);
+        assert_eq!(msg, "Method not found");
+    }
+
+    #[test]
+    fn extract_no_error_from_success() {
+        let val = json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": []}});
+        assert!(extract_error_code(&val).is_none());
     }
 }
