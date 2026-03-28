@@ -14,6 +14,7 @@ use crate::AppState;
 use crate::display::log_request;
 use crate::jsonrpc::{self, McpMethod};
 use crate::rewrite::rewrite_response;
+use crate::session::{self, SessionState, SessionStore};
 use crate::tui::state::LogEntry;
 use crate::widgets::{
     fetch_widget_html, list_widgets, serve_studio, serve_widget_asset, serve_widget_html,
@@ -251,6 +252,25 @@ async fn handle_mcp_post(
     let mcp_method = parsed.mcp_method();
     let method_str = mcp_method.as_str();
 
+    // Extract client info from initialize request before forwarding
+    let client_info = if mcp_method == McpMethod::Initialize {
+        parsed.first_params().and_then(session::parse_client_info)
+    } else {
+        None
+    };
+
+    // Track session activity and state transitions
+    let req_session_id = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    if let Some(ref sid) = req_session_id {
+        state.sessions.touch(sid).await;
+        if mcp_method == McpMethod::Initialized {
+            state.sessions.update_state(sid, SessionState::Active).await;
+        }
+    }
+
     // Intercept resources/read for widget HTML serving (single requests only)
     if mcp_method == McpMethod::ResourcesRead && !parsed.is_batch && state.widget_source.is_some() {
         // Re-parse as Value for the interception logic
@@ -273,6 +293,7 @@ async fn handle_mcp_post(
                 &state.tui_state,
                 LogEntry::new("POST", path, 502, "upstream error")
                     .mcp_method(method_str)
+                    .maybe_session_id(req_session_id.as_deref())
                     .upstream(&upstream_url)
                     .upstream_duration(upstream_ms)
                     .duration(start),
@@ -283,6 +304,27 @@ async fn handle_mcp_post(
 
     let status = resp.status().as_u16();
     let resp_headers = resp.headers().clone();
+
+    // Track session from upstream response — for initialize, the session ID is in the response
+    let resp_session_id = resp_headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    if mcp_method == McpMethod::Initialize
+        && status < 400
+        && let Some(ref sid) = resp_session_id
+    {
+        state.sessions.create(sid).await;
+        state
+            .sessions
+            .update_state(sid, SessionState::Initialized)
+            .await;
+        if let Some(info) = client_info {
+            state.sessions.set_client_info(sid, info).await;
+        }
+    }
+    // Use response session ID (for initialize) or request session ID (for everything else)
+    let log_session_id = resp_session_id.or(req_session_id);
 
     // Collect full body for rewriting (POST SSE is finite)
     let resp_bytes = resp.bytes().await.unwrap_or_default();
@@ -308,6 +350,7 @@ async fn handle_mcp_post(
             &state.tui_state,
             LogEntry::new("POST", path, status, note)
                 .mcp_method(method_str)
+                .maybe_session_id(log_session_id.as_deref())
                 .upstream(&upstream_url)
                 .size(body.len())
                 .upstream_duration(upstream_ms)
@@ -319,6 +362,7 @@ async fn handle_mcp_post(
             &state.tui_state,
             LogEntry::new("POST", path, status, "passthrough")
                 .mcp_method(method_str)
+                .maybe_session_id(log_session_id.as_deref())
                 .upstream(&upstream_url)
                 .size(resp_bytes.len())
                 .upstream_duration(upstream_ms)

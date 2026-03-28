@@ -5,6 +5,12 @@ use std::time::Instant;
 const MAX_LOG_ENTRIES: usize = 10_000;
 
 #[derive(Clone, Copy, PartialEq)]
+pub enum Tab {
+    Requests,
+    Sessions,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum ConnectionStatus {
     Unknown,
     Disconnected,
@@ -28,6 +34,7 @@ pub struct LogEntry {
     pub method: String,
     pub path: String,
     pub mcp_method: Option<String>,
+    pub session_id: Option<String>,
     pub status: u16,
     pub note: String,
     pub upstream_url: Option<String>,
@@ -44,6 +51,7 @@ impl LogEntry {
             method: method.to_string(),
             path: path.to_string(),
             mcp_method: None,
+            session_id: None,
             status,
             note: note.to_string(),
             upstream_url: None,
@@ -51,6 +59,16 @@ impl LogEntry {
             duration_ms: None,
             upstream_ms: None,
         }
+    }
+
+    pub fn session_id(mut self, id: &str) -> Self {
+        self.session_id = Some(id.to_string());
+        self
+    }
+
+    pub fn maybe_session_id(mut self, id: Option<&str>) -> Self {
+        self.session_id = id.map(String::from);
+        self
     }
 
     pub fn mcp_method(mut self, m: &str) -> Self {
@@ -93,10 +111,15 @@ pub struct TuiState {
     pub started_at: Instant,
     pub request_count: u64,
 
-    // Log panel
+    // Right panel
+    pub active_tab: Tab,
     pub log_entries: VecDeque<LogEntry>,
     pub auto_scroll: bool,
     pub scroll_offset: u16,
+
+    // Sessions tab
+    pub selected_session: usize,
+    pub session_detail_scroll: u16,
 }
 
 impl TuiState {
@@ -113,9 +136,12 @@ impl TuiState {
             widget_names: Vec::new(),
             started_at: Instant::now(),
             request_count: 0,
+            active_tab: Tab::Requests,
             log_entries: VecDeque::new(),
             auto_scroll: true,
             scroll_offset: 0,
+            selected_session: 0,
+            session_detail_scroll: 0,
         }
     }
 

@@ -4,6 +4,7 @@ mod jsonrpc;
 mod proxy;
 mod relay;
 mod rewrite;
+mod session;
 mod tui;
 mod tunnel;
 mod widgets;
@@ -18,6 +19,7 @@ use config::{GatewayConfig, Mode};
 use display::log_startup;
 use proxy::proxy_routes;
 use rewrite::RewriteConfig;
+use session::MemorySessionStore;
 use tui::SharedTuiState;
 use widgets::WidgetSource;
 
@@ -28,6 +30,7 @@ pub struct AppState {
     pub rewrite_config: Arc<RwLock<RewriteConfig>>,
     pub http_client: reqwest::Client,
     pub tui_state: SharedTuiState,
+    pub sessions: MemorySessionStore,
 }
 
 #[tokio::main]
@@ -130,6 +133,7 @@ async fn run_gateway(cfg: GatewayConfig) {
         rewrite_config: Arc::new(RwLock::new(rewrite_config)),
         http_client: reqwest::Client::new(),
         tui_state: tui_state.clone(),
+        sessions: MemorySessionStore::new(),
     };
 
     let cors = CorsLayer::new()
@@ -139,6 +143,7 @@ async fn run_gateway(cfg: GatewayConfig) {
         .expose_headers(Any);
 
     let health_state = state.clone();
+    let tui_sessions = state.sessions.clone();
 
     let app: Router<AppState> = Router::new();
     let app = proxy_routes(app);
@@ -166,7 +171,7 @@ async fn run_gateway(cfg: GatewayConfig) {
 
     // Run the TUI on a blocking thread (it reads stdin)
     let tui_handle = tokio::task::spawn_blocking(move || {
-        tui::run(tui_state).expect("TUI failed");
+        tui::run(tui_state, tui_sessions).expect("TUI failed");
     });
 
     tui_handle.await.unwrap();
