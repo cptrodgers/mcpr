@@ -94,11 +94,57 @@ nginx -t && systemctl reload nginx
 
 Caddy handles TLS automatically with wildcard certs via DNS challenge.
 
-## 4. Run the Relay
+## 4. Configuration
+
+Create `mcpr.toml` on the relay server:
+
+### Open mode (no auth -- anyone can tunnel)
+
+```toml
+mode = "relay"
+port = 8081
+
+[relay]
+domain = "tunnel.yourdomain.com"
+```
+
+### Secured mode (with auth provider)
+
+```toml
+mode = "relay"
+port = 8081
+
+[relay]
+domain = "tunnel.yourdomain.com"
+auth_provider = "https://auth.yourdomain.com"
+auth_provider_secret = "your-shared-secret-here"
+```
+
+When `auth_provider` is set, every tunnel registration is validated via:
+
+```
+POST {auth_provider}/api/verify
+Header: X-Relay-Secret: {auth_provider_secret}
+Body:   { "token": "...", "subdomain": "..." }
+
+200 -> { "subdomains": ["myapp", "myapp-*"] }   (allowed)
+401 -> { "error": "invalid_token" }              (rejected)
+403 -> { "error": "subdomain_not_allowed" }      (rejected)
+```
+
+Subdomain patterns support wildcards: `myapp-*` matches `myapp-dev`, `myapp-feat-123`, etc.
+
+The relay itself has no database -- it delegates all auth decisions to your provider.
+
+## 5. Run the Relay
 
 ### Direct
 
 ```bash
+# With mcpr.toml in current directory:
+mcpr --relay
+
+# Or with CLI flags (no config file needed):
 mcpr --relay --port 8081 --relay-domain tunnel.yourdomain.com
 ```
 
@@ -113,30 +159,57 @@ docker run -d \
   --relay --port 8080 --relay-domain tunnel.yourdomain.com
 ```
 
+To enable auth via Docker, pass environment variables:
+
+```bash
+docker run -d \
+  --name mcpr-relay \
+  --restart unless-stopped \
+  -p 8081:8080 \
+  -e MCPR_AUTH_PROVIDER=https://auth.yourdomain.com \
+  -e MCPR_AUTH_PROVIDER_SECRET=your-shared-secret-here \
+  ghcr.io/cptrodgers/mcpr:latest \
+  --relay --port 8080 --relay-domain tunnel.yourdomain.com
+```
+
 ### Update
 
 ```bash
 docker pull ghcr.io/cptrodgers/mcpr:latest
 docker stop mcpr-relay && docker rm mcpr-relay
-docker run -d \
-  --name mcpr-relay \
-  --restart unless-stopped \
-  -p 8081:8080 \
-  ghcr.io/cptrodgers/mcpr:latest \
-  --relay --port 8080 --relay-domain tunnel.yourdomain.com
+# re-run the docker run command above
 ```
 
-## 5. Verify
+## 6. Client Setup
 
-From your local machine:
+On the developer's machine, create `mcpr.toml`:
+
+```toml
+mcp = "http://localhost:9000/mcp"
+widgets = "http://localhost:4444"
+
+[tunnel]
+relay_url = "https://tunnel.yourdomain.com"
+# subdomain = "myapp"          # optional fixed subdomain
+# token = "your-api-token"     # required when relay has auth enabled
+```
+
+Then run:
+
+```bash
+mcpr
+# Should print: Tunnel: https://xxxxxx.tunnel.yourdomain.com
+```
+
+## 7. Verify
 
 ```bash
 # Check relay is reachable
 curl -s https://tunnel.yourdomain.com/_tunnel/register
+# Expected: "missing token" (400) -- means relay is running
 
 # Full test: start mcpr client
-mcpr --relay-url https://tunnel.yourdomain.com --mcp http://localhost:9000
-# Should print: Tunnel: https://xxxxxx.tunnel.yourdomain.com
+mcpr --mcp http://localhost:9000 --relay-url https://tunnel.yourdomain.com
 ```
 
 ## Troubleshooting
@@ -144,6 +217,9 @@ mcpr --relay-url https://tunnel.yourdomain.com --mcp http://localhost:9000
 | Issue | Fix |
 |-------|-----|
 | `tunnel not found` | Client not connected. Check mcpr client logs. |
+| `invalid token` / 401 | Auth provider rejected the token. Check your `[tunnel].token`. |
+| `subdomain not authorized` / 403 | Token valid but not allowed for this subdomain. |
+| `auth provider unavailable` / 503 | Relay can't reach the auth provider. Check URL and network. |
 | SSL errors | Check cert: `sudo certbot certificates` |
 | WebSocket timeout | Verify nginx `proxy_read_timeout` is set high |
 | 502 from nginx | Check relay is running: `docker logs mcpr-relay` |

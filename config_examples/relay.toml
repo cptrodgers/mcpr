@@ -1,8 +1,18 @@
-# Relay server mode — run mcpr as the tunnel relay
+# ── Relay Server ─────────────────────────────────────────────────────
+# Run the tunnel relay that developers connect to.
 # Start with: mcpr --relay
+#
+# This is typically deployed on a VPS with a wildcard domain
+# (e.g. *.tunnel.mcpr.app) behind nginx/Caddy for TLS.
 
-# Port the relay server listens on
+mode = "relay"
 port = 8080
 
+[relay]
 # Base domain for tunnel subdomains (e.g. <subdomain>.tunnel.mcpr.app)
-relay_domain = "tunnel.mcpr.app"
+domain = "tunnel.mcpr.app"
+
+# Auth provider (optional) — when set, tokens are validated via external API.
+# Without this, the relay runs in open mode (anyone can create a tunnel).
+# auth_provider = "https://auth.mcpr.app"
+# auth_provider_secret = "your-shared-secret-here"
