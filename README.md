@@ -4,9 +4,10 @@
 
 <h1 align="center">mcpr</h1>
 
-<p align="center">
-  Proxy layer for <a href="https://modelcontextprotocol.io/extensions/apps/overview">MCP App</a> (ChatGPT App SDK, Claude Customize, etc) — tunnel, test, and debug your MCP App from localhost.
-</p>
+**Nginx handles HTTP. mcpr handles MCP.**
+
+MCP-aware proxy for ChatGPT Apps and Claude connectors.
+Tunnel, test, and ship — one command, one endpoint.
 
 ![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
 
@@ -51,12 +52,18 @@ The URL stays the same across restarts — configure your AI client once, keep d
 
 ### mcpr Studio
 
-Test your MCP tools and preview widgets locally — no AI model, no API key, no subscription. Studio simulates what ChatGPT and Claude do:
+Test your MCP tools and preview widgets locally — no AI model, no API key, no subscription.
+
+Without Studio, the only way to test widgets is deploying to a public URL and opening them inside ChatGPT or Claude. That means waiting for deployments, burning API credits, and debugging through layers of indirection. Studio gives you the same sandboxed environment locally.
 
 - **Call tools** — execute your MCP tools with custom input and see raw responses
-- **Render & interact with widgets** — preview the returned UI and interact with it just like a user would on ChatGPT or Claude, testing the full widget flow end-to-end
-- **Inspect actions** — trace every action your widget fires back to the host
-- **Switch platforms** — toggle between OpenAI and Claude simulation modes
+- **Render & interact with widgets** — preview the returned UI in a sandboxed iframe, just like ChatGPT and Claude do in production
+- **Full widget API simulation** — `window.openai` (ChatGPT) and JSON-RPC 2.0 (Claude) widget APIs are fully mocked, including `callTool`, `sendFollowUpMessage`, `openExternal`, resize, display modes, and more
+- **CSP & sandbox enforcement** — Studio applies production-equivalent Content Security Policy and sandbox restrictions, catching violations before you deploy
+- **Inspect actions** — trace every postMessage your widget fires back to the host
+- **Switch platforms** — toggle between OpenAI and Claude simulation modes to verify your widget works on both
+- **OAuth debugger** — visualize and debug MCP OAuth flows without leaving Studio
+- **Viewport testing** — preview on mobile (430×932), tablet (820×1180), desktop (1280×800), or custom sizes
 
 ![mcpr Studio](docs/images/mcpr-app-studio.png)
 
@@ -70,15 +77,23 @@ AI clients require CSP headers, widget domains, and OAuth URLs tailored to each 
 - **Widget & OAuth domains** — rewrite URLs so your server stays environment-agnostic
 - **Zero redeploy** — change config at the proxy, not in your application
 
-## Why mcpr over a generic tunnel?
+## Comparison
 
-A generic tunnel (ngrok, Cloudflare Tunnel, etc.) gets you a public URL — that's it. mcpr is purpose-built for MCP App development:
+| | ngrok | Cloudflare Tunnel | MCPJam Inspector | mcpr |
+|---|---|---|---|---|
+| **MCP protocol awareness** | None — treats MCP as opaque HTTP | None | Yes — full JSON-RPC inspection | Parses JSON-RPC, inspects tool calls |
+| **Multi-service behind one URL** | Separate URLs per service. Path routing needs paid plan. | Possible with Workers config | No — inspector only, not a proxy | Auto-detects MCP requests vs widget requests, merges behind one URL |
+| **Tunnel to public HTTPS** | Yes | Yes | No | Yes, one command |
+| **Widget testing** | No | No | Yes — emulates ChatGPT & Claude widget APIs | Yes — Studio emulates both platforms with CSP enforcement |
+| **Widget HTML rewriting** | No | No | No — not a proxy | Rewrites relative paths so widgets work in sandboxed iframes |
+| **CSP for MCP Apps** | Manual Traffic Policy | Manual Workers | CSP testing in inspector | Built-in per-environment CSP injection at the proxy layer |
+| **OAuth debugging** | No | No | Yes — visual OAuth flow debugger | Yes — built-in OAuth debugger in Studio |
+| **LLM playground** | No | No | Yes — test against GPT-5, Claude, Gemini | No |
+| **Price** | Free tier for single endpoint; paid for path routing | Free | Free, open source | Free, open source |
 
-- **One URL, two services** — MCP server + widget dev server merged behind a single endpoint with automatic routing. No need for separate tunnels.
-- **Hot reload** — proxy to your Vite/webpack dev server for instant feedback instead of rebuilding and re-bundling on every change.
-- **Asset path rewriting** — relative paths like `/style.css` break inside sandboxed iframes. mcpr rewrites them to the tunnel URL automatically.
-- **CSP at the proxy layer** — AI clients require specific Content Security Policy headers. mcpr injects them per environment so your server stays agnostic.
-- **Studio** — test tools and widgets locally without connecting to a real AI client.
+> **When ngrok is fine:** ngrok works well if you have a simple MCP server with no widgets (tool-only), bundled single-HTML widgets served inline, or you already have ngrok's paid plan with Traffic Policy.
+>
+> **When MCPJam is great:** MCPJam Inspector is an excellent standalone testing client. If you only need to inspect and test your MCP server without tunneling or proxying, it's a great choice. mcpr focuses on the proxy/tunnel side — they complement each other.
 
 ## Getting Started
 
