@@ -330,58 +330,58 @@ pub fn load() -> Mode {
     let cli = Cli::parse();
     let (file, config_path) = FileConfig::load();
 
-    let is_relay = cli.relay || file.is_relay();
-
-    if is_relay {
-        let port = cli
-            .port
-            .or(file.port)
-            .expect("port is required for relay mode (--port or port in mcpr.toml)");
-        let relay_domain = cli.relay_domain.or(file.relay_domain()).expect(
-            "relay domain is required for relay mode (--relay-domain or [relay].domain in mcpr.toml)",
-        );
-        let auth_provider = cli.auth_provider.or(file.relay.auth_provider);
-        let auth_provider_secret = cli.auth_provider_secret.or(file.relay.auth_provider_secret);
-
-        Mode::Relay(RelayConfig {
-            port,
-            relay_domain,
-            auth_provider,
-            auth_provider_secret,
-        })
+    if cli.relay || file.is_relay() {
+        load_relay(cli, file)
     } else {
-        // Resolve values from file before consuming fields
-        let tunnel_relay_url = file.tunnel_relay_url();
-        let tunnel_token = file.tunnel_token();
-        let tunnel_subdomain = file.tunnel_subdomain();
-
-        let csp_domains = if cli.csp_domains.is_empty() {
-            file.csp.domains
-        } else {
-            cli.csp_domains
-        };
-
-        let csp_mode = if let Some(m) = &cli.csp_mode {
-            parse_csp_mode(m)
-        } else if let Some(m) = &file.csp.mode {
-            parse_csp_mode(m)
-        } else {
-            CspMode::default()
-        };
-
-        Mode::Gateway(GatewayConfig {
-            mcp: cli.mcp.or(file.mcp),
-            widgets: cli.widgets.or(file.widgets),
-            port: cli.port.or(file.port),
-            csp_domains,
-            csp_mode,
-            relay_url: cli.relay_url.or(tunnel_relay_url),
-            tunnel_token,
-            tunnel_subdomain,
-            no_tunnel: cli.no_tunnel || file.no_tunnel,
-            config_path,
-        })
+        load_gateway(cli, file, config_path)
     }
+}
+
+fn load_relay(cli: Cli, file: FileConfig) -> Mode {
+    let port = cli
+        .port
+        .or(file.port)
+        .expect("port is required for relay mode (--port or port in mcpr.toml)");
+    let relay_domain = cli.relay_domain.or(file.relay_domain()).expect(
+        "relay domain is required for relay mode (--relay-domain or [relay].domain in mcpr.toml)",
+    );
+
+    Mode::Relay(RelayConfig {
+        port,
+        relay_domain,
+        auth_provider: cli.auth_provider.or(file.relay.auth_provider),
+        auth_provider_secret: cli.auth_provider_secret.or(file.relay.auth_provider_secret),
+    })
+}
+
+fn load_gateway(cli: Cli, file: FileConfig, config_path: Option<std::path::PathBuf>) -> Mode {
+    let tunnel_relay_url = file.tunnel_relay_url();
+    let tunnel_token = file.tunnel_token();
+    let tunnel_subdomain = file.tunnel_subdomain();
+
+    let csp_domains = if cli.csp_domains.is_empty() {
+        file.csp.domains
+    } else {
+        cli.csp_domains
+    };
+
+    let csp_mode = match cli.csp_mode.as_deref().or(file.csp.mode.as_deref()) {
+        Some(m) => parse_csp_mode(m),
+        None => CspMode::default(),
+    };
+
+    Mode::Gateway(GatewayConfig {
+        mcp: cli.mcp.or(file.mcp),
+        widgets: cli.widgets.or(file.widgets),
+        port: cli.port.or(file.port),
+        csp_domains,
+        csp_mode,
+        relay_url: cli.relay_url.or(tunnel_relay_url),
+        tunnel_token,
+        tunnel_subdomain,
+        no_tunnel: cli.no_tunnel || file.no_tunnel,
+        config_path,
+    })
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
