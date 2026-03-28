@@ -251,6 +251,7 @@ async fn handle_mcp_post(
 ) -> Response {
     let mcp_method = parsed.mcp_method();
     let method_str = mcp_method.as_str();
+    let call_detail = parsed.detail();
 
     // Extract client info from initialize request before forwarding
     let client_info = if mcp_method == McpMethod::Initialize {
@@ -293,6 +294,7 @@ async fn handle_mcp_post(
                 &state.tui_state,
                 LogEntry::new("POST", path, 502, "upstream error")
                     .mcp_method(method_str)
+                    .maybe_detail(call_detail.as_deref())
                     .maybe_session_id(req_session_id.as_deref())
                     .upstream(&upstream_url)
                     .upstream_duration(upstream_ms)
@@ -338,6 +340,10 @@ async fn handle_mcp_post(
     };
 
     if let Ok(mut json_body) = serde_json::from_slice::<Value>(&json_bytes) {
+        // Check for JSON-RPC error in response body (extract before mutable rewrite)
+        let rpc_error =
+            jsonrpc::extract_error_code(&json_body).map(|(code, msg)| (code, msg.to_string()));
+
         rewrite_response(method_str, &mut json_body, &config);
         let rewritten = serde_json::to_vec(&json_body).unwrap_or(json_bytes);
         let body = if is_sse {
@@ -346,22 +352,25 @@ async fn handle_mcp_post(
             rewritten
         };
         let note = if is_sse { "rewritten+sse" } else { "rewritten" };
-        log_request(
-            &state.tui_state,
-            LogEntry::new("POST", path, status, note)
-                .mcp_method(method_str)
-                .maybe_session_id(log_session_id.as_deref())
-                .upstream(&upstream_url)
-                .size(body.len())
-                .upstream_duration(upstream_ms)
-                .duration(start),
-        );
+        let mut entry = LogEntry::new("POST", path, status, note)
+            .mcp_method(method_str)
+            .maybe_detail(call_detail.as_deref())
+            .maybe_session_id(log_session_id.as_deref())
+            .upstream(&upstream_url)
+            .size(body.len())
+            .upstream_duration(upstream_ms)
+            .duration(start);
+        if let Some((code, ref msg)) = rpc_error {
+            entry = entry.jsonrpc_error(code, msg);
+        }
+        log_request(&state.tui_state, entry);
         build_response(status, &resp_headers, Body::from(body))
     } else {
         log_request(
             &state.tui_state,
             LogEntry::new("POST", path, status, "passthrough")
                 .mcp_method(method_str)
+                .maybe_detail(call_detail.as_deref())
                 .maybe_session_id(log_session_id.as_deref())
                 .upstream(&upstream_url)
                 .size(resp_bytes.len())

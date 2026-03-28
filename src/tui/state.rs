@@ -42,6 +42,10 @@ pub struct LogEntry {
     pub duration_ms: Option<u64>,
     /// Time spent waiting for upstream (network). Proxy overhead = duration_ms - upstream_ms.
     pub upstream_ms: Option<u64>,
+    /// JSON-RPC error code from the response body (if the response is a JSON-RPC error).
+    pub jsonrpc_error: Option<(i64, String)>,
+    /// Extra detail: tool name for tools/call, resource URI for resources/read, etc.
+    pub detail: Option<String>,
 }
 
 impl LogEntry {
@@ -58,6 +62,8 @@ impl LogEntry {
             resp_size: None,
             duration_ms: None,
             upstream_ms: None,
+            jsonrpc_error: None,
+            detail: None,
         }
     }
 
@@ -93,6 +99,21 @@ impl LogEntry {
 
     pub fn upstream_duration(mut self, ms: u64) -> Self {
         self.upstream_ms = Some(ms);
+        self
+    }
+
+    pub fn jsonrpc_error(mut self, code: i64, message: &str) -> Self {
+        self.jsonrpc_error = Some((code, message.to_string()));
+        self
+    }
+
+    pub fn detail(mut self, d: &str) -> Self {
+        self.detail = Some(d.to_string());
+        self
+    }
+
+    pub fn maybe_detail(mut self, d: Option<&str>) -> Self {
+        self.detail = d.map(String::from);
         self
     }
 }

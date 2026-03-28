@@ -306,8 +306,23 @@ fn render_log_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ));
+                // Detail: tool name, resource URI, etc.
+                if let Some(ref detail) = entry.detail {
+                    spans.push(Span::styled(
+                        format!(" {detail}"),
+                        Style::default().fg(Color::White),
+                    ));
+                }
             } else {
                 spans.push(Span::raw(entry.path.clone()));
+            }
+
+            // JSON-RPC error (if response contains one)
+            if let Some((code, ref msg)) = entry.jsonrpc_error {
+                spans.push(Span::styled(
+                    format!(" [{code} {msg}]"),
+                    Style::default().fg(Color::Red),
+                ));
             }
 
             // Upstream URL
@@ -339,7 +354,10 @@ fn render_log_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) {
         s.scroll_offset
     };
 
-    let paragraph = Paragraph::new(log_lines).block(block).scroll((scroll, 0));
+    let paragraph = Paragraph::new(log_lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 
     // Scrollbar
