@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -141,6 +143,7 @@ async fn handle_request(
     uri: axum::http::Uri,
     body: Bytes,
 ) -> Response {
+    let start = Instant::now();
     let path = uri.path();
 
     // 0. Studio SPA (bundled)
@@ -179,15 +182,16 @@ async fn handle_request(
 
     // 2. MCP JSON-RPC POST — detect by body ("jsonrpc": "2.0"), not headers.
     // Non-JSON-RPC POSTs (OAuth /register, /token) fall through to passthrough (rule 4).
-    if method == Method::POST {
-        if let Some(parsed) = parse_mcp_body(&body) {
-            return handle_mcp_post(&state, path, &headers, &body, parsed).await;
-        }
+    if method == Method::POST
+        && let Some(parsed) = parse_mcp_body(&body)
+    {
+        return handle_mcp_post(&state, path, &headers, &body, parsed, start).await;
     }
 
     // 3. MCP SSE GET (text/event-stream) → stream from mcp_upstream
     if method == Method::GET && is_mcp_sse(&headers) {
         let upstream_url = state.mcp_upstream.trim_end_matches('/').to_string();
+        let upstream_start = Instant::now();
         return match forward_request(
             &state,
             &upstream_url,
@@ -198,11 +202,15 @@ async fn handle_request(
         .await
         {
             Ok(resp) => {
+                let upstream_ms = upstream_start.elapsed().as_millis() as u64;
                 let status = resp.status().as_u16();
                 let resp_headers = resp.headers().clone();
                 log_request(
                     &state.tui_state,
-                    LogEntry::new("GET", path, status, "sse").upstream(&upstream_url),
+                    LogEntry::new("GET", path, status, "sse")
+                        .upstream(&upstream_url)
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 build_response(
                     status,
@@ -211,9 +219,13 @@ async fn handle_request(
                 )
             }
             Err(e) => {
+                let upstream_ms = upstream_start.elapsed().as_millis() as u64;
                 log_request(
                     &state.tui_state,
-                    LogEntry::new("GET", path, 502, "upstream error").upstream(&upstream_url),
+                    LogEntry::new("GET", path, 502, "upstream error")
+                        .upstream(&upstream_url)
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 (StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response()
             }
@@ -223,7 +235,7 @@ async fn handle_request(
     // 4. Everything else (DELETE, well-known, oauth, GET, POST) → MCP upstream + path
     let (base, _) = split_upstream(&state.mcp_upstream);
     let upstream_url = format!("{}{}", base.trim_end_matches('/'), path);
-    forward_and_passthrough(&state, &upstream_url, method, path, &headers, &body).await
+    forward_and_passthrough(&state, &upstream_url, method, path, &headers, &body, start).await
 }
 
 /// Handle MCP JSON-RPC POST — intercept resources/read, forward, rewrite response.
@@ -234,6 +246,7 @@ async fn handle_mcp_post(
     headers: &HeaderMap,
     body: &Bytes,
     parsed: jsonrpc::ParsedBody,
+    start: Instant,
 ) -> Response {
     let mcp_method = parsed.mcp_method();
     let method_str = mcp_method.as_str();
@@ -241,23 +254,28 @@ async fn handle_mcp_post(
     // Intercept resources/read for widget HTML serving (single requests only)
     if mcp_method == McpMethod::ResourcesRead && !parsed.is_batch && state.widget_source.is_some() {
         // Re-parse as Value for the interception logic
-        if let Ok(json_val) = serde_json::from_slice::<Value>(body) {
-            if let Some(response) = handle_resources_read(state, headers, body, &json_val).await {
-                return response;
-            }
+        if let Ok(json_val) = serde_json::from_slice::<Value>(body)
+            && let Some(response) =
+                handle_resources_read(state, headers, body, &json_val, start).await
+        {
+            return response;
         }
     }
 
     // Forward to upstream MCP URL
     let upstream_url = state.mcp_upstream.trim_end_matches('/').to_string();
+    let upstream_start = Instant::now();
     let resp = match forward_request(state, &upstream_url, Method::POST, headers, body).await {
         Ok(r) => r,
         Err(e) => {
+            let upstream_ms = upstream_start.elapsed().as_millis() as u64;
             log_request(
                 &state.tui_state,
                 LogEntry::new("POST", path, 502, "upstream error")
                     .mcp_method(method_str)
-                    .upstream(&upstream_url),
+                    .upstream(&upstream_url)
+                    .upstream_duration(upstream_ms)
+                    .duration(start),
             );
             return (StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response();
         }
@@ -268,6 +286,7 @@ async fn handle_mcp_post(
 
     // Collect full body for rewriting (POST SSE is finite)
     let resp_bytes = resp.bytes().await.unwrap_or_default();
+    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
     let config = state.rewrite_config.read().await;
 
     // Try to parse and rewrite JSON response (may be SSE-wrapped)
@@ -290,7 +309,9 @@ async fn handle_mcp_post(
             LogEntry::new("POST", path, status, note)
                 .mcp_method(method_str)
                 .upstream(&upstream_url)
-                .size(body.len()),
+                .size(body.len())
+                .upstream_duration(upstream_ms)
+                .duration(start),
         );
         build_response(status, &resp_headers, Body::from(body))
     } else {
@@ -299,7 +320,9 @@ async fn handle_mcp_post(
             LogEntry::new("POST", path, status, "passthrough")
                 .mcp_method(method_str)
                 .upstream(&upstream_url)
-                .size(resp_bytes.len()),
+                .size(resp_bytes.len())
+                .upstream_duration(upstream_ms)
+                .duration(start),
         );
         build_response(status, &resp_headers, Body::from(resp_bytes))
     }
@@ -311,6 +334,7 @@ async fn handle_resources_read(
     headers: &HeaderMap,
     raw_body: &Bytes,
     parsed: &Value,
+    start: Instant,
 ) -> Option<Response> {
     let uri = parsed
         .get("params")
@@ -324,11 +348,13 @@ async fn handle_resources_read(
 
     // Forward to upstream to get the metadata
     let upstream_url = state.mcp_upstream.trim_end_matches('/').to_string();
+    let upstream_start = Instant::now();
     let upstream_resp = forward_request(state, &upstream_url, Method::POST, headers, raw_body)
         .await
         .ok()?;
 
     let upstream_bytes = upstream_resp.bytes().await.ok()?;
+    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
     let json_bytes =
         extract_json_from_sse(&upstream_bytes).unwrap_or_else(|| upstream_bytes.to_vec());
     let mut json_body: Value = serde_json::from_slice(&json_bytes).ok()?;
@@ -355,7 +381,9 @@ async fn handle_resources_read(
         &state.tui_state,
         LogEntry::new("POST", "/*", 200, "intercepted")
             .mcp_method(jsonrpc::RESOURCES_READ)
-            .size(body.len()),
+            .size(body.len())
+            .upstream_duration(upstream_ms)
+            .duration(start),
     );
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -370,12 +398,15 @@ async fn forward_and_passthrough(
     log_path: &str,
     headers: &HeaderMap,
     body: &Bytes,
+    start: Instant,
 ) -> Response {
+    let upstream_start = Instant::now();
     match forward_request(state, url, method.clone(), headers, body).await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let resp_headers = resp.headers().clone();
             let bytes = resp.bytes().await.unwrap_or_default();
+            let upstream_ms = upstream_start.elapsed().as_millis() as u64;
 
             // Rewrite upstream base URL → proxy URL in JSON responses
             // (e.g. OAuth metadata: registration_endpoint, issuer, etc.)
@@ -399,7 +430,9 @@ async fn forward_and_passthrough(
                     &state.tui_state,
                     LogEntry::new(method.as_str(), log_path, status, "rewritten")
                         .upstream(url)
-                        .size(rewritten_bytes.len()),
+                        .size(rewritten_bytes.len())
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 build_response(status, &resp_headers, Body::from(rewritten_bytes))
             } else {
@@ -407,15 +440,21 @@ async fn forward_and_passthrough(
                     &state.tui_state,
                     LogEntry::new(method.as_str(), log_path, status, "passthrough")
                         .upstream(url)
-                        .size(bytes.len()),
+                        .size(bytes.len())
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 build_response(status, &resp_headers, Body::from(bytes))
             }
         }
         Err(e) => {
+            let upstream_ms = upstream_start.elapsed().as_millis() as u64;
             log_request(
                 &state.tui_state,
-                LogEntry::new(method.as_str(), log_path, 502, "upstream error").upstream(url),
+                LogEntry::new(method.as_str(), log_path, 502, "upstream error")
+                    .upstream(url)
+                    .upstream_duration(upstream_ms)
+                    .duration(start),
             );
             (StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response()
         }

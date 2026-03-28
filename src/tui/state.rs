@@ -32,6 +32,9 @@ pub struct LogEntry {
     pub note: String,
     pub upstream_url: Option<String>,
     pub resp_size: Option<usize>,
+    pub duration_ms: Option<u64>,
+    /// Time spent waiting for upstream (network). Proxy overhead = duration_ms - upstream_ms.
+    pub upstream_ms: Option<u64>,
 }
 
 impl LogEntry {
@@ -45,6 +48,8 @@ impl LogEntry {
             note: note.to_string(),
             upstream_url: None,
             resp_size: None,
+            duration_ms: None,
+            upstream_ms: None,
         }
     }
 
@@ -60,6 +65,16 @@ impl LogEntry {
 
     pub fn size(mut self, bytes: usize) -> Self {
         self.resp_size = Some(bytes);
+        self
+    }
+
+    pub fn duration(mut self, start: Instant) -> Self {
+        self.duration_ms = Some(start.elapsed().as_millis() as u64);
+        self
+    }
+
+    pub fn upstream_duration(mut self, ms: u64) -> Self {
+        self.upstream_ms = Some(ms);
         self
     }
 }
