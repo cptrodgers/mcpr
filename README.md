@@ -1,6 +1,12 @@
-# mcpr
+<p align="center">
+  <img src="docs/images/mcpr-logo.jpg" alt="mcpr logo" width="200" />
+</p>
 
-Proxy layer for [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) (ChatGPT App SDK, Claude Customize, etc) — tunnel, test, and debug your MCP App from localhost.
+<h1 align="center">mcpr</h1>
+
+<p align="center">
+  Proxy layer for <a href="https://modelcontextprotocol.io/extensions/apps/overview">MCP App</a> (ChatGPT App SDK, Claude Customize, etc) — tunnel, test, and debug your MCP App from localhost.
+</p>
 
 ![mcpr Terminal UI](docs/images/mcpr-app-screenshot.png)
 

@@ -73,31 +73,42 @@ fn render_info_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) 
         truncate(&s.widgets)
     };
 
-    let mut lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Proxy   ", Style::default().fg(Color::DarkGray)),
-            Span::raw(truncate(&s.proxy_url)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Tunnel  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                truncate(&s.tunnel_url),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  MCP     ", Style::default().fg(Color::DarkGray)),
-            Span::raw(truncate(&s.mcp_upstream)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Widgets ", Style::default().fg(Color::DarkGray)),
-            Span::raw(widgets_display),
-        ]),
-        Line::from(""),
-    ];
+    // ASCII logo
+    let logo_color = Color::Rgb(210, 130, 50); // orange to match the logo
+    let logo_lines = [r"  ┌─┬─┐ ", r"  │╲│╱│ ", r"  │╱ ╲│ ", r"  └─┴─┘ "];
+    let mut lines: Vec<Line> = logo_lines
+        .iter()
+        .map(|l| {
+            Line::from(Span::styled(
+                *l,
+                Style::default().fg(logo_color).add_modifier(Modifier::BOLD),
+            ))
+        })
+        .collect();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Proxy   ", Style::default().fg(Color::DarkGray)),
+        Span::raw(truncate(&s.proxy_url)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Tunnel  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            truncate(&s.tunnel_url),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  MCP     ", Style::default().fg(Color::DarkGray)),
+        Span::raw(truncate(&s.mcp_upstream)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Widgets ", Style::default().fg(Color::DarkGray)),
+        Span::raw(widgets_display),
+    ]));
+    lines.push(Line::from(""));
 
     lines.push(status_line("Tunnel", s.tunnel_status));
     lines.push(status_line("MCP", s.mcp_status));

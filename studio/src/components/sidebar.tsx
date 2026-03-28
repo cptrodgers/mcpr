@@ -108,7 +108,11 @@ export function Sidebar() {
       {/* Logo */}
       <div className="px-4 py-3 border-b shrink-0">
         <div className="flex items-center gap-2">
-          <img src="/studio/logo.svg" alt="mcpr" className="w-6 h-6" />
+          <img
+            src="/studio/mcpr-logo.jpg"
+            alt="mcpr"
+            className="w-6 h-6 rounded"
+          />
           <span className="font-semibold text-sm">mcpr studio</span>
         </div>
         {isRemoteProxy() && (
