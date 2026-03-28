@@ -147,26 +147,32 @@ Run your own tunnel relay instead of using `tunnel.mcpr.app`. This requires wild
 
 See [docs/DEPLOY_RELAY_SERVER.md](docs/DEPLOY_RELAY_SERVER.md) for the full guide before getting started.
 
+The relay supports three auth modes -- open (anyone can tunnel), static tokens (hardcoded in config), or external auth provider (for dynamic token management). See [docs/AUTH_PROVIDER.md](docs/AUTH_PROVIDER.md) for details on building an auth provider.
+
 ## CLI
 
 ```
 mcpr [OPTIONS]
 
-Options:
-  --mcp <URL>              Upstream MCP server
-  --widgets <URL|PATH>     Widget source (URL = proxy, PATH = static serve)
-  --port <PORT>            Local proxy port
-  --csp <DOMAIN>           Extra CSP domains (repeatable)
-  --csp-mode <MODE>        CSP mode: "extend" (default) or "override"
-  --relay-url <URL>        Custom relay server (env: MCPR_RELAY_URL)
-  --no-tunnel              Local-only, no tunnel
-  --relay                  Run as relay server
-  --relay-domain <DOMAIN>  Relay base domain (required in relay mode)
+Gateway mode (default):
+  --mcp <URL>                     Upstream MCP server
+  --widgets <URL|PATH>            Widget source (URL = proxy, PATH = static serve)
+  --port <PORT>                   Local proxy port
+  --csp <DOMAIN>                  Extra CSP domains (repeatable)
+  --csp-mode <MODE>               CSP mode: "extend" (default) or "override"
+  --relay-url <URL>               Custom relay server (env: MCPR_RELAY_URL)
+  --no-tunnel                     Local-only, no tunnel
+
+Relay mode:
+  --relay                         Run as relay server
+  --relay-domain <DOMAIN>         Relay base domain (required in relay mode)
+  --auth-provider <URL>           Auth provider URL (env: MCPR_AUTH_PROVIDER)
+  --auth-provider-secret <SECRET> Shared secret (env: MCPR_AUTH_PROVIDER_SECRET)
 ```
 
 Config priority: **CLI args > environment variables > mcpr.toml > defaults**
 
-See [`config_examples/`](config_examples/) for ready-to-use templates.
+See [`config_examples/`](config_examples/) for ready-to-use templates and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference.
 
 ## Contributing
 

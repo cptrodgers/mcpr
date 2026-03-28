@@ -1,6 +1,14 @@
 # Building an Auth Provider for mcpr Relay
 
-The mcpr relay server can optionally delegate authentication to an external **auth provider**. This document describes the API contract your auth provider must implement, the subdomain pattern format, and example implementations.
+The mcpr relay server supports three auth modes:
+
+1. **Open** -- no auth, anyone can tunnel (default)
+2. **Static tokens** -- hardcoded in `mcpr.toml`, no external service needed (see [DEPLOY_RELAY_SERVER.md](DEPLOY_RELAY_SERVER.md))
+3. **Auth provider** -- external API for dynamic token management (this document)
+
+If you just need a few developers with fixed tokens, use **static tokens**. Use an auth provider when you need dynamic token management, user registration, or revocation at scale.
+
+This document describes the API contract your auth provider must implement, the subdomain pattern format, and example implementations.
 
 ## Overview
 

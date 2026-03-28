@@ -108,6 +108,30 @@ port = 8081
 domain = "tunnel.yourdomain.com"
 ```
 
+### Static tokens (simple -- no external service)
+
+```toml
+mode = "relay"
+port = 8081
+
+[relay]
+domain = "tunnel.yourdomain.com"
+
+[[relay.tokens]]
+token = "mcpr_abc123"
+subdomains = ["myapp", "myapp-*"]
+
+[[relay.tokens]]
+token = "mcpr_def456"
+subdomains = ["other-app", "other-app-*"]
+```
+
+Each token has a list of allowed subdomain patterns. Patterns support glob wildcards:
+`myapp-*`, `*-preview`, `pr-*-acme`, `*` (allow all).
+
+The client sets `[tunnel].token` in their `mcpr.toml` to one of these values.
+See [STATIC_TOKENS.md](STATIC_TOKENS.md) for real-world scenarios (team setup, CI/CD previews, demos).
+
 ### Secured mode (with auth provider)
 
 ```toml
