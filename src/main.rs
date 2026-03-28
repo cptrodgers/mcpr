@@ -1,6 +1,7 @@
 mod config;
 mod display;
 mod proxy;
+mod relay;
 mod rewrite;
 mod tui;
 mod tunnel;
@@ -12,7 +13,7 @@ use tokio::sync::RwLock;
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
-use config::ResolvedConfig;
+use config::{GatewayConfig, Mode};
 use display::log_startup;
 use proxy::proxy_routes;
 use rewrite::RewriteConfig;
@@ -30,19 +31,17 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() {
-    let cfg = ResolvedConfig::load();
-
-    // Relay mode: just run the relay server
-    if cfg.relay {
-        let port = cfg.port.expect("port is required in mcpr.toml or --port");
-        let relay_domain = cfg
-            .relay_domain
-            .expect("relay_domain is required in mcpr.toml or --relay-domain");
-        tunnel::start_relay(port, relay_domain).await;
-        return;
+    match config::load() {
+        Mode::Relay(cfg) => {
+            relay::start_relay(cfg).await;
+        }
+        Mode::Gateway(cfg) => {
+            run_gateway(cfg).await;
+        }
     }
+}
 
-    // Client mode: local proxy + tunnel
+async fn run_gateway(cfg: GatewayConfig) {
     let tui_state = tui::new_shared_state();
 
     let mcp = cfg.mcp.expect("mcp is required in mcpr.toml or --mcp");
@@ -78,10 +77,10 @@ async fn main() {
             .expect("relay_url is required in mcpr.toml or --relay-url");
         let config_path = cfg.config_path.clone();
         let (token, desired_subdomain) =
-            ResolvedConfig::resolve_tunnel_identity(cfg.tunnel_subdomain, cfg.tunnel_token, || {
+            GatewayConfig::resolve_tunnel_identity(cfg.tunnel_subdomain, cfg.tunnel_token, || {
                 let new_token = uuid::Uuid::new_v4().to_string();
                 if let Some(path) = &config_path {
-                    ResolvedConfig::save_tunnel_token(path, &new_token);
+                    GatewayConfig::save_tunnel_token(path, &new_token);
                 }
                 new_token
             });

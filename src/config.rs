@@ -1,8 +1,19 @@
 use clap::Parser;
 
+use crate::relay::config::RelayConfig;
+
 const CONFIG_FILE: &str = "mcpr.toml";
 
-/// CSP rewriting mode
+// ── Run mode ────────────────────────────────────────────────────────────
+
+/// Top-level mode: either run as a relay server or as the gateway proxy.
+pub enum Mode {
+    Relay(RelayConfig),
+    Gateway(GatewayConfig),
+}
+
+// ── CSP rewriting ───────────────────────────────────────────────────────
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CspMode {
     /// Keep external domains from upstream, strip localhost, add configured extras + tunnel domain
@@ -21,9 +32,18 @@ impl std::fmt::Display for CspMode {
     }
 }
 
+fn parse_csp_mode(s: &str) -> CspMode {
+    match s.to_lowercase().as_str() {
+        "override" => CspMode::Override,
+        _ => CspMode::Extend,
+    }
+}
+
+// ── CLI args ────────────────────────────────────────────────────────────
+
 #[derive(Parser)]
 #[command(name = "mcpr", about = "MCP proxy with widget serving and tunnel")]
-pub struct Cli {
+struct Cli {
     /// Upstream MCP server URL
     #[arg(long)]
     mcp: Option<String>,
@@ -52,7 +72,15 @@ pub struct Cli {
     #[arg(long)]
     relay_domain: Option<String>,
 
-    /// Relay server URL
+    /// Auth provider URL for token validation (relay mode)
+    #[arg(long, env = "MCPR_AUTH_PROVIDER")]
+    auth_provider: Option<String>,
+
+    /// Shared secret between relay and auth provider
+    #[arg(long, env = "MCPR_AUTH_PROVIDER_SECRET")]
+    auth_provider_secret: Option<String>,
+
+    /// Relay server URL (for gateway tunnel mode)
     #[arg(long, env = "MCPR_RELAY_URL")]
     relay_url: Option<String>,
 
@@ -61,7 +89,9 @@ pub struct Cli {
     no_tunnel: bool,
 }
 
-/// `[csp]` section in config file
+// ── TOML config file ────────────────────────────────────────────────────
+
+/// `[csp]` table in config file
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct FileCspConfig {
@@ -69,26 +99,49 @@ struct FileCspConfig {
     domains: Vec<String>,
 }
 
+/// `[relay]` table in config file
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct FileRelayConfig {
+    domain: Option<String>,
+    auth_provider: Option<String>,
+    auth_provider_secret: Option<String>,
+}
+
+/// `[tunnel]` table in config file
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct FileTunnelConfig {
+    relay_url: Option<String>,
+    token: Option<String>,
+    subdomain: Option<String>,
+}
+
 /// Config file format (mcpr.toml)
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct FileConfig {
+    // -- Shared --
+    port: Option<u16>,
+    mode: Option<String>, // "relay" | "gateway" (default)
+
+    // -- Gateway --
     mcp: Option<String>,
     widgets: Option<String>,
-    port: Option<u16>,
+    no_tunnel: bool,
     csp: FileCspConfig,
+
+    // -- Relay --
+    relay: FileRelayConfig,
+
+    // -- Tunnel client --
+    tunnel: FileTunnelConfig,
+
+    // -- Legacy flat fields (backward compat) --
     relay_domain: Option<String>,
     relay_url: Option<String>,
     tunnel_token: Option<String>,
     tunnel_subdomain: Option<String>,
-    no_tunnel: bool,
-}
-
-fn parse_csp_mode(s: &str) -> CspMode {
-    match s.to_lowercase().as_str() {
-        "override" => CspMode::Override,
-        _ => CspMode::Extend,
-    }
 }
 
 impl FileConfig {
@@ -123,17 +176,45 @@ impl FileConfig {
         }
         (FileConfig::default(), None)
     }
+
+    /// Resolve relay domain: [relay].domain > relay_domain (legacy)
+    fn relay_domain(&self) -> Option<String> {
+        self.relay.domain.clone().or(self.relay_domain.clone())
+    }
+
+    /// Resolve tunnel relay URL: [tunnel].relay_url > relay_url (legacy)
+    fn tunnel_relay_url(&self) -> Option<String> {
+        self.tunnel.relay_url.clone().or(self.relay_url.clone())
+    }
+
+    /// Resolve tunnel token: [tunnel].token > tunnel_token (legacy)
+    fn tunnel_token(&self) -> Option<String> {
+        self.tunnel.token.clone().or(self.tunnel_token.clone())
+    }
+
+    /// Resolve tunnel subdomain: [tunnel].subdomain > tunnel_subdomain (legacy)
+    fn tunnel_subdomain(&self) -> Option<String> {
+        self.tunnel
+            .subdomain
+            .clone()
+            .or(self.tunnel_subdomain.clone())
+    }
+
+    /// Is relay mode via config file: mode = "relay"
+    fn is_relay(&self) -> bool {
+        self.mode.as_deref() == Some("relay")
+    }
 }
 
-/// Resolved configuration: CLI args override config file, which overrides defaults.
-pub struct ResolvedConfig {
+// ── Gateway config ──────────────────────────────────────────────────────
+
+/// Resolved configuration for gateway (proxy) mode.
+pub struct GatewayConfig {
     pub mcp: Option<String>,
     pub widgets: Option<String>,
     pub port: Option<u16>,
     pub csp_domains: Vec<String>,
     pub csp_mode: CspMode,
-    pub relay: bool,
-    pub relay_domain: Option<String>,
     pub relay_url: Option<String>,
     pub tunnel_token: Option<String>,
     pub tunnel_subdomain: Option<String>,
@@ -141,42 +222,7 @@ pub struct ResolvedConfig {
     pub config_path: Option<std::path::PathBuf>,
 }
 
-impl ResolvedConfig {
-    /// Parse CLI args, load config file, and merge into a resolved config.
-    pub fn load() -> Self {
-        let cli = Cli::parse();
-        let (file_config, config_path) = FileConfig::load();
-
-        let csp_domains = if cli.csp_domains.is_empty() {
-            file_config.csp.domains
-        } else {
-            cli.csp_domains
-        };
-
-        let csp_mode = if let Some(m) = &cli.csp_mode {
-            parse_csp_mode(m)
-        } else if let Some(m) = &file_config.csp.mode {
-            parse_csp_mode(m)
-        } else {
-            CspMode::default()
-        };
-
-        Self {
-            mcp: cli.mcp.or(file_config.mcp),
-            widgets: cli.widgets.or(file_config.widgets),
-            port: cli.port.or(file_config.port),
-            csp_domains,
-            csp_mode,
-            relay: cli.relay,
-            relay_domain: cli.relay_domain.or(file_config.relay_domain),
-            relay_url: cli.relay_url.or(file_config.relay_url),
-            tunnel_token: file_config.tunnel_token,
-            tunnel_subdomain: file_config.tunnel_subdomain,
-            no_tunnel: cli.no_tunnel || file_config.no_tunnel,
-            config_path,
-        }
-    }
-
+impl GatewayConfig {
     /// Resolve tunnel identity from config.
     /// Priority: tunnel_subdomain > tunnel_token > generate new.
     /// Returns (token, desired_subdomain).
@@ -192,12 +238,38 @@ impl ResolvedConfig {
         (token, None)
     }
 
-    /// Append tunnel_token to the config file so the URL persists across restarts.
+    /// Append tunnel token to the config file so the URL persists across restarts.
     pub fn save_tunnel_token(path: &std::path::Path, token: &str) {
         match std::fs::read_to_string(path) {
             Ok(contents) => {
-                let new_contents = if contents.contains("# tunnel_token") {
-                    contents.replacen(
+                // Check for new [tunnel] table format first
+                if contents.contains("[tunnel]") {
+                    if contents.contains("token =") || contents.contains("token=") {
+                        return; // already set
+                    }
+                    // Insert token under [tunnel] section
+                    let new_contents =
+                        contents.replacen("[tunnel]", &format!("[tunnel]\ntoken = \"{token}\""), 1);
+                    if let Err(e) = std::fs::write(path, new_contents) {
+                        eprintln!(
+                            "  {}: failed to save tunnel token to {}: {}",
+                            colored::Colorize::yellow("warn"),
+                            path.display(),
+                            e
+                        );
+                    } else {
+                        eprintln!(
+                            "  {} saved tunnel token to {}",
+                            colored::Colorize::dimmed("config"),
+                            path.display()
+                        );
+                    }
+                    return;
+                }
+
+                // Legacy flat format
+                if contents.contains("# tunnel_token") {
+                    let new_contents = contents.replacen(
                         &contents
                             .lines()
                             .find(|l| l.contains("# tunnel_token"))
@@ -205,25 +277,38 @@ impl ResolvedConfig {
                             .to_string(),
                         &format!("tunnel_token = \"{token}\""),
                         1,
-                    )
-                } else if contents.contains("tunnel_token") {
-                    return;
-                } else {
-                    format!("{}\ntunnel_token = \"{token}\"\n", contents.trim_end())
-                };
-                if let Err(e) = std::fs::write(path, new_contents) {
-                    eprintln!(
-                        "  {}: failed to save tunnel_token to {}: {}",
-                        colored::Colorize::yellow("warn"),
-                        path.display(),
-                        e
                     );
-                } else {
-                    eprintln!(
-                        "  {} saved tunnel_token to {}",
-                        colored::Colorize::dimmed("config"),
-                        path.display()
-                    );
+                    if let Err(e) = std::fs::write(path, new_contents) {
+                        eprintln!(
+                            "  {}: failed to save tunnel_token to {}: {}",
+                            colored::Colorize::yellow("warn"),
+                            path.display(),
+                            e
+                        );
+                    } else {
+                        eprintln!(
+                            "  {} saved tunnel_token to {}",
+                            colored::Colorize::dimmed("config"),
+                            path.display()
+                        );
+                    }
+                } else if !contents.contains("tunnel_token") {
+                    let new_contents =
+                        format!("{}\ntunnel_token = \"{token}\"\n", contents.trim_end());
+                    if let Err(e) = std::fs::write(path, new_contents) {
+                        eprintln!(
+                            "  {}: failed to save tunnel_token to {}: {}",
+                            colored::Colorize::yellow("warn"),
+                            path.display(),
+                            e
+                        );
+                    } else {
+                        eprintln!(
+                            "  {} saved tunnel_token to {}",
+                            colored::Colorize::dimmed("config"),
+                            path.display()
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -238,13 +323,76 @@ impl ResolvedConfig {
     }
 }
 
+// ── Load + dispatch ─────────────────────────────────────────────────────
+
+/// Parse CLI args, load config file, and return the resolved mode.
+pub fn load() -> Mode {
+    let cli = Cli::parse();
+    let (file, config_path) = FileConfig::load();
+
+    let is_relay = cli.relay || file.is_relay();
+
+    if is_relay {
+        let port = cli
+            .port
+            .or(file.port)
+            .expect("port is required for relay mode (--port or port in mcpr.toml)");
+        let relay_domain = cli.relay_domain.or(file.relay_domain()).expect(
+            "relay domain is required for relay mode (--relay-domain or [relay].domain in mcpr.toml)",
+        );
+        let auth_provider = cli.auth_provider.or(file.relay.auth_provider);
+        let auth_provider_secret = cli.auth_provider_secret.or(file.relay.auth_provider_secret);
+
+        Mode::Relay(RelayConfig {
+            port,
+            relay_domain,
+            auth_provider,
+            auth_provider_secret,
+        })
+    } else {
+        // Resolve values from file before consuming fields
+        let tunnel_relay_url = file.tunnel_relay_url();
+        let tunnel_token = file.tunnel_token();
+        let tunnel_subdomain = file.tunnel_subdomain();
+
+        let csp_domains = if cli.csp_domains.is_empty() {
+            file.csp.domains
+        } else {
+            cli.csp_domains
+        };
+
+        let csp_mode = if let Some(m) = &cli.csp_mode {
+            parse_csp_mode(m)
+        } else if let Some(m) = &file.csp.mode {
+            parse_csp_mode(m)
+        } else {
+            CspMode::default()
+        };
+
+        Mode::Gateway(GatewayConfig {
+            mcp: cli.mcp.or(file.mcp),
+            widgets: cli.widgets.or(file.widgets),
+            port: cli.port.or(file.port),
+            csp_domains,
+            csp_mode,
+            relay_url: cli.relay_url.or(tunnel_relay_url),
+            tunnel_token,
+            tunnel_subdomain,
+            no_tunnel: cli.no_tunnel || file.no_tunnel,
+            config_path,
+        })
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn subdomain_takes_priority_over_token() {
-        let (token, sub) = ResolvedConfig::resolve_tunnel_identity(
+        let (token, sub) = GatewayConfig::resolve_tunnel_identity(
             Some("673977ba420f".into()),
             Some("90c74def-8fdc-4922-8702-44bc5cabf830".into()),
             || panic!("should not generate"),
@@ -256,7 +404,7 @@ mod tests {
     #[test]
     fn subdomain_without_token() {
         let (token, sub) =
-            ResolvedConfig::resolve_tunnel_identity(Some("abcdef123456".into()), None, || {
+            GatewayConfig::resolve_tunnel_identity(Some("abcdef123456".into()), None, || {
                 panic!("should not generate")
             });
         assert_eq!(token, "abcdef123456");
@@ -266,7 +414,7 @@ mod tests {
     #[test]
     fn no_subdomain_uses_token() {
         let (token, sub) =
-            ResolvedConfig::resolve_tunnel_identity(None, Some("my-saved-token".into()), || {
+            GatewayConfig::resolve_tunnel_identity(None, Some("my-saved-token".into()), || {
                 panic!("should not generate")
             });
         assert_eq!(token, "my-saved-token");
@@ -276,7 +424,7 @@ mod tests {
     #[test]
     fn no_subdomain_no_token_generates() {
         let (token, sub) =
-            ResolvedConfig::resolve_tunnel_identity(None, None, || "generated-uuid".into());
+            GatewayConfig::resolve_tunnel_identity(None, None, || "generated-uuid".into());
         assert_eq!(token, "generated-uuid");
         assert_eq!(sub, None);
     }

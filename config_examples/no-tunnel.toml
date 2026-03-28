@@ -1,18 +1,18 @@
-# Local-only mode — no tunnel, no relay
-# Access the proxy at http://localhost:<port>
+# ── Gateway (Local Only) ─────────────────────────────────────────────
+# No tunnel, no relay. Access at http://localhost:<port>.
 
 # Upstream MCP server
 mcp = "http://localhost:9000/mcp"
 
-# Widget source: URL (proxy mode) or path (static mode)
+# Widget source: URL (dev server) or file path (static build)
 widgets = "http://localhost:4444"
 
-# Local proxy port (required in no-tunnel mode)
+# Local proxy port (required in local-only mode)
 port = 3000
 
 # Disable tunnel
 no_tunnel = true
 
-# [csp]
+[csp]
 # mode = "extend"  # "extend" (default) or "override"
 # domains = ["https://media.mcpr.app", "https://api.dictionaryapi.dev"]
