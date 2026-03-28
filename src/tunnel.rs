@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 
-use crate::relay::{RegisterAck, TunnelRequest, TunnelResponse};
+use crate::relay::{RegisterAck, RegisterRequest, TunnelRequest, TunnelResponse};
 
 /// Connect to a relay server and return the assigned public URL.
 /// Spawns a background task that proxies requests from relay → localhost.
@@ -18,17 +18,14 @@ pub async fn start_tunnel_client(
     tui_state: crate::tui::SharedTuiState,
 ) -> Result<String, String> {
     let relay = relay_url.trim_end_matches('/');
-    let sub_param = subdomain
-        .map(|s| format!("&subdomain={s}"))
-        .unwrap_or_default();
     let ws_url = if relay.starts_with("ws://") || relay.starts_with("wss://") {
-        format!("{relay}/_tunnel/register?token={token}{sub_param}")
+        format!("{relay}/_tunnel/register")
     } else if let Some(rest) = relay.strip_prefix("https://") {
-        format!("wss://{rest}/_tunnel/register?token={token}{sub_param}")
+        format!("wss://{rest}/_tunnel/register")
     } else if let Some(rest) = relay.strip_prefix("http://") {
-        format!("ws://{rest}/_tunnel/register?token={token}{sub_param}")
+        format!("ws://{rest}/_tunnel/register")
     } else {
-        format!("wss://{relay}/_tunnel/register?token={token}{sub_param}")
+        format!("wss://{relay}/_tunnel/register")
     };
 
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -37,7 +34,19 @@ pub async fn start_tunnel_client(
 
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
 
-    // Read registration ack
+    // Send token as first message (not in URL to avoid log exposure)
+    let reg = RegisterRequest {
+        token: token.to_string(),
+        subdomain: subdomain.map(|s| s.to_string()),
+    };
+    ws_sink
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&reg).unwrap().into(),
+        ))
+        .await
+        .map_err(|e| format!("Failed to send registration: {e}"))?;
+
+    // Read registration ack (or close frame on auth failure)
     let ack: RegisterAck = loop {
         match ws_stream.next().await {
             Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
@@ -45,6 +54,12 @@ pub async fn start_tunnel_client(
                     Ok(ack) => break ack,
                     Err(_) => continue,
                 }
+            }
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                return Err(format!("Authentication failed: {}", frame.reason));
+            }
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(None))) => {
+                return Err("Authentication failed: relay closed connection".into());
             }
             Some(Err(e)) => return Err(format!("WebSocket error: {e}")),
             None => return Err("Relay closed connection before ack".into()),

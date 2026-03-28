@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Query, State, WebSocketUpgrade};
+use axum::extract::{State, WebSocketUpgrade};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
@@ -37,6 +37,13 @@ pub struct TunnelResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub body: Option<String>, // base64
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub token: String,
+    #[serde(default)]
+    pub subdomain: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -144,84 +151,71 @@ pub async fn start_relay(cfg: RelayConfig) {
 }
 
 /// WebSocket registration endpoint.
-async fn handle_register(
-    ws: WebSocketUpgrade,
-    Query(params): Query<HashMap<String, String>>,
-    State(state): State<Arc<RelayState>>,
-) -> Response {
-    let token = match params.get("token") {
-        Some(t) => t.clone(),
-        None => return (StatusCode::BAD_REQUEST, "missing token").into_response(),
+/// Token is sent as the first message after upgrade (not in query string).
+async fn handle_register(ws: WebSocketUpgrade, State(state): State<Arc<RelayState>>) -> Response {
+    ws.on_upgrade(move |socket| handle_tunnel_ws(socket, state))
+}
+
+async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
+    let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // Read RegisterRequest as the first message (contains token + optional subdomain)
+    let reg: RegisterRequest = loop {
+        match ws_stream.next().await {
+            Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
+                Ok(req) => break req,
+                Err(_) => continue,
+            },
+            Some(Err(_)) | None => return,
+            _ => continue,
+        }
     };
-    let requested_subdomain = params.get("subdomain").cloned();
+
+    let token = reg.token;
+    let subdomain = reg.subdomain.unwrap_or_else(|| token_to_subdomain(&token));
 
     // Validate token based on auth mode
-    let subdomain_to_check = requested_subdomain
-        .clone()
-        .unwrap_or_else(|| token_to_subdomain(&token));
-
-    match &state.auth {
-        AuthMode::Open => {}
+    let reject = match &state.auth {
+        AuthMode::Open => None,
         AuthMode::Static(tokens) => match tokens.get(&token) {
-            Some(allowed) => {
-                if !subdomain_matches(allowed, &subdomain_to_check) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        format!(
-                            "subdomain '{}' not authorized for this token",
-                            subdomain_to_check
-                        ),
-                    )
-                        .into_response();
-                }
-            }
-            None => {
-                return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
-            }
+            Some(allowed) if subdomain_matches(allowed, &subdomain) => None,
+            Some(_) => Some(format!(
+                "subdomain '{}' not authorized for this token",
+                subdomain
+            )),
+            None => Some("invalid token".into()),
         },
-        AuthMode::Provider(auth) => match verify_token(auth, &token, &subdomain_to_check).await {
-            Ok(allowed_subdomains) => {
-                if !subdomain_matches(&allowed_subdomains, &subdomain_to_check) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        format!(
-                            "subdomain '{}' not authorized for this token",
-                            subdomain_to_check
-                        ),
-                    )
-                        .into_response();
-                }
-            }
-            Err(AuthError::InvalidToken(msg)) => {
-                return (StatusCode::UNAUTHORIZED, msg).into_response();
-            }
+        AuthMode::Provider(auth) => match verify_token(auth, &token, &subdomain).await {
+            Ok(allowed) if subdomain_matches(&allowed, &subdomain) => None,
+            Ok(_) => Some(format!(
+                "subdomain '{}' not authorized for this token",
+                subdomain
+            )),
+            Err(AuthError::InvalidToken(msg)) => Some(msg),
             Err(AuthError::ProviderUnavailable(msg)) => {
                 println!(
                     "  {} auth provider error: {}",
                     colored::Colorize::red("✗"),
                     msg
                 );
-                return (StatusCode::SERVICE_UNAVAILABLE, "auth provider unavailable")
-                    .into_response();
+                Some("auth provider unavailable".into())
             }
         },
+    };
+
+    if let Some(reason) = reject {
+        let _ = ws_sink
+            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                code: 4001,
+                reason: reason.into(),
+            })))
+            .await;
+        return;
     }
 
-    ws.on_upgrade(move |socket| handle_tunnel_ws(socket, token, requested_subdomain, state))
-}
-
-async fn handle_tunnel_ws(
-    socket: WebSocket,
-    token: String,
-    requested_subdomain: Option<String>,
-    state: Arc<RelayState>,
-) {
-    let subdomain = requested_subdomain.unwrap_or_else(|| token_to_subdomain(&token));
     let url = format!("https://{}.{}", subdomain, state.base_domain);
 
-    let (mut ws_sink, mut ws_stream) = socket.split();
-
-    // Send registration ack with assigned subdomain
+    // Send registration ack
     let ack = RegisterAck {
         subdomain: subdomain.clone(),
         url: url.clone(),
