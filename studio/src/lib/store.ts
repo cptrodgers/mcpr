@@ -96,7 +96,7 @@ export interface PendingMessage {
   content: unknown;
 }
 
-export type AuthMethod = "oauth" | "bearer";
+export type AuthMethod = "oauth" | "bearer" | "custom";
 
 export type OAuthStatus =
   | "idle"
@@ -114,6 +114,7 @@ export interface OAuthState {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
+  customHeaders: string;
   accessToken: string | null;
   refreshToken: string | null;
   expiresAt: number | null;
@@ -348,6 +349,7 @@ interface StudioState {
   setOAuthClientId: (id: string) => void;
   setOAuthClientSecret: (secret: string) => void;
   setOAuthRedirectUri: (uri: string) => void;
+  setOAuthCustomHeaders: (headers: string) => void;
   setOAuthSelectedScopes: (scopes: string[]) => void;
   testOAuthEndpoints: () => Promise<void>;
   addOAuthDebugEvent: (event: OAuthDebugEvent) => void;
@@ -402,6 +404,7 @@ export const useStore = create<StudioState>((set, get) => ({
     clientId: "",
     clientSecret: "",
     redirectUri: "",
+    customHeaders: localStorage.getItem("mcpr_studio_custom_headers") || "",
     accessToken: null,
     refreshToken: null,
     expiresAt: null,
@@ -530,6 +533,16 @@ export const useStore = create<StudioState>((set, get) => ({
 
   setOAuthClientSecret: (secret) => {
     set((s) => ({ oauth: { ...s.oauth, clientSecret: secret } }));
+  },
+
+  setOAuthCustomHeaders: (headers) => {
+    set((s) => ({ oauth: { ...s.oauth, customHeaders: headers } }));
+    // Persist so api.ts buildHeaders() can read it
+    if (headers.trim()) {
+      localStorage.setItem("mcpr_studio_custom_headers", headers);
+    } else {
+      localStorage.removeItem("mcpr_studio_custom_headers");
+    }
   },
 
   setOAuthRedirectUri: (uri) => {

@@ -104,7 +104,7 @@ export function Sidebar() {
   const totalItems = tools.length + widgets.length + resources.length;
 
   return (
-    <div className="w-56 shrink-0 border-r flex flex-col h-full">
+    <div className="w-72 shrink-0 border-r flex flex-col h-full">
       {/* Logo */}
       <div className="px-4 py-3 border-b shrink-0">
         <div className="flex items-center gap-2">

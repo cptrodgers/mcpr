@@ -141,9 +141,9 @@ export function StudioLayout() {
               )}
             </div>
           }
-          defaultRatio={0.6}
-          minTopPx={120}
-          minBottomPx={80}
+          defaultRatio={0.4}
+          minTopPx={100}
+          minBottomPx={200}
         />
       </div>
 
