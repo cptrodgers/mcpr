@@ -12,7 +12,22 @@ port = 8080
 # Base domain for tunnel subdomains (e.g. <subdomain>.tunnel.mcpr.app)
 domain = "tunnel.mcpr.app"
 
-# Auth provider (optional) — when set, tokens are validated via external API.
-# Without this, the relay runs in open mode (anyone can create a tunnel).
+# ── Auth: pick ONE of the options below (or none for open mode) ─────
+
+# Option 1: Static tokens — simple, no external service needed.
+# Each token has a list of allowed subdomain patterns.
+# Patterns support glob wildcards: "myapp-*", "*-preview", "pr-*-acme"
+#
+# [[relay.tokens]]
+# token = "mcpr_abc123"
+# subdomains = ["myapp", "myapp-*"]
+#
+# [[relay.tokens]]
+# token = "mcpr_def456"
+# subdomains = ["other-app", "other-app-*"]
+
+# Option 2: External auth provider — for dynamic token management.
+# See docs/AUTH_PROVIDER.md for the API contract.
+#
 # auth_provider = "https://auth.mcpr.app"
 # auth_provider_secret = "your-shared-secret-here"

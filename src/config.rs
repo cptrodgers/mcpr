@@ -99,6 +99,13 @@ struct FileCspConfig {
     domains: Vec<String>,
 }
 
+/// Entry in `[[relay.tokens]]` array
+#[derive(serde::Deserialize)]
+struct FileTokenEntry {
+    token: String,
+    subdomains: Vec<String>,
+}
+
 /// `[relay]` table in config file
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
@@ -106,6 +113,7 @@ struct FileRelayConfig {
     domain: Option<String>,
     auth_provider: Option<String>,
     auth_provider_secret: Option<String>,
+    tokens: Vec<FileTokenEntry>,
 }
 
 /// `[tunnel]` table in config file
@@ -346,11 +354,19 @@ fn load_relay(cli: Cli, file: FileConfig) -> Mode {
         "relay domain is required for relay mode (--relay-domain or [relay].domain in mcpr.toml)",
     );
 
+    let tokens = file
+        .relay
+        .tokens
+        .into_iter()
+        .map(|e| (e.token, e.subdomains))
+        .collect();
+
     Mode::Relay(RelayConfig {
         port,
         relay_domain,
         auth_provider: cli.auth_provider.or(file.relay.auth_provider),
         auth_provider_secret: cli.auth_provider_secret.or(file.relay.auth_provider_secret),
+        tokens,
     })
 }
 

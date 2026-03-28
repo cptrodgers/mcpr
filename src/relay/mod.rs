@@ -60,8 +60,18 @@ struct RelayState {
     tunnels: RwLock<HashMap<String, Arc<TunnelConnection>>>,
     /// Base domain for tunnel URLs
     base_domain: String,
-    /// Optional auth provider for token validation
-    auth_provider: Option<AuthProviderConfig>,
+    /// Auth mode for token validation
+    auth: AuthMode,
+}
+
+/// How the relay validates tunnel registration tokens.
+enum AuthMode {
+    /// No authentication — anyone can tunnel
+    Open,
+    /// Static tokens from config file (token → allowed subdomain patterns)
+    Static(HashMap<String, Vec<String>>),
+    /// External auth provider API
+    Provider(AuthProviderConfig),
 }
 
 /// Derive a consistent subdomain from a token.
@@ -80,33 +90,39 @@ mod hex {
 
 /// Start the relay server.
 pub async fn start_relay(cfg: RelayConfig) {
-    let auth = cfg.auth_provider.map(|url| {
+    let auth = if !cfg.tokens.is_empty() {
+        let count = cfg.tokens.len();
+        println!(
+            "  {} static tokens: {} token(s) configured",
+            colored::Colorize::green("✓"),
+            count,
+        );
+        AuthMode::Static(cfg.tokens)
+    } else if let Some(url) = cfg.auth_provider {
         let secret = cfg
             .auth_provider_secret
             .expect("auth_provider_secret is required when auth_provider is set");
-        AuthProviderConfig {
+        println!("  {} auth provider enabled", colored::Colorize::green("✓"));
+        AuthMode::Provider(AuthProviderConfig {
             url: url.trim_end_matches('/').to_string(),
             secret,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap(),
-        }
-    });
-
-    if auth.is_some() {
-        println!("  {} auth provider enabled", colored::Colorize::green("✓"),);
+        })
     } else {
         println!(
-            "  {} no auth provider — open mode (anyone can tunnel)",
+            "  {} open mode (anyone can tunnel)",
             colored::Colorize::yellow("!"),
         );
-    }
+        AuthMode::Open
+    };
 
     let state = Arc::new(RelayState {
         tunnels: RwLock::new(HashMap::new()),
         base_domain: cfg.relay_domain,
-        auth_provider: auth,
+        auth,
     });
 
     let app = Router::new()
@@ -139,13 +155,31 @@ async fn handle_register(
     };
     let requested_subdomain = params.get("subdomain").cloned();
 
-    // If auth provider is configured, validate token before upgrading to WebSocket
-    if let Some(auth) = &state.auth_provider {
-        let subdomain_to_check = requested_subdomain
-            .clone()
-            .unwrap_or_else(|| token_to_subdomain(&token));
+    // Validate token based on auth mode
+    let subdomain_to_check = requested_subdomain
+        .clone()
+        .unwrap_or_else(|| token_to_subdomain(&token));
 
-        match verify_token(auth, &token, &subdomain_to_check).await {
+    match &state.auth {
+        AuthMode::Open => {}
+        AuthMode::Static(tokens) => match tokens.get(&token) {
+            Some(allowed) => {
+                if !subdomain_matches(allowed, &subdomain_to_check) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        format!(
+                            "subdomain '{}' not authorized for this token",
+                            subdomain_to_check
+                        ),
+                    )
+                        .into_response();
+                }
+            }
+            None => {
+                return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+            }
+        },
+        AuthMode::Provider(auth) => match verify_token(auth, &token, &subdomain_to_check).await {
             Ok(allowed_subdomains) => {
                 if !subdomain_matches(&allowed_subdomains, &subdomain_to_check) {
                     return (
@@ -170,7 +204,7 @@ async fn handle_register(
                 return (StatusCode::SERVICE_UNAVAILABLE, "auth provider unavailable")
                     .into_response();
             }
-        }
+        },
     }
 
     ws.on_upgrade(move |socket| handle_tunnel_ws(socket, token, requested_subdomain, state))

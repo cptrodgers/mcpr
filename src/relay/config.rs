@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Configuration for the relay server.
 pub struct RelayConfig {
     /// Port the relay server listens on
@@ -8,4 +10,6 @@ pub struct RelayConfig {
     pub auth_provider: Option<String>,
     /// Shared secret between relay and auth provider
     pub auth_provider_secret: Option<String>,
+    /// Static token → allowed subdomains map (alternative to auth provider)
+    pub tokens: HashMap<String, Vec<String>>,
 }
