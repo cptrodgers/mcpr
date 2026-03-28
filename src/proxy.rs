@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -10,6 +12,7 @@ use serde_json::Value;
 
 use crate::AppState;
 use crate::display::log_request;
+use crate::jsonrpc::{self, McpMethod};
 use crate::rewrite::rewrite_response;
 use crate::tui::state::LogEntry;
 use crate::widgets::{
@@ -65,13 +68,11 @@ fn split_upstream(url: &str) -> (&str, &str) {
     }
 }
 
-/// Check if a POST request is an MCP JSON-RPC call based on content-type.
-fn is_mcp_post(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.starts_with("application/json"))
-        .unwrap_or(false)
+/// Check if a POST body is a valid JSON-RPC 2.0 message (MCP request).
+/// This is the definitive MCP detection: parse the body and check for "jsonrpc": "2.0".
+/// OAuth, form-encoded, and other non-JSON-RPC POSTs will return None.
+fn parse_mcp_body(body: &Bytes) -> Option<jsonrpc::ParsedBody> {
+    jsonrpc::parse_body(body)
 }
 
 /// Check if a GET request is an MCP SSE call based on accept header.
@@ -142,6 +143,7 @@ async fn handle_request(
     uri: axum::http::Uri,
     body: Bytes,
 ) -> Response {
+    let start = Instant::now();
     let path = uri.path();
 
     // 0. Studio SPA (bundled)
@@ -178,18 +180,18 @@ async fn handle_request(
         return serve_widget_asset(&state, path).await;
     }
 
-    // 2. MCP JSON-RPC POST (application/json with "jsonrpc" field) → parse, intercept, rewrite
-    // Non-JSON-RPC POSTs (OAuth /register, /token) fall through to passthrough (rule 4)
+    // 2. MCP JSON-RPC POST — detect by body ("jsonrpc": "2.0"), not headers.
+    // Non-JSON-RPC POSTs (OAuth /register, /token) fall through to passthrough (rule 4).
     if method == Method::POST
-        && is_mcp_post(&headers)
-        && let Some(resp) = handle_mcp_post(&state, path, &headers, &body).await
+        && let Some(parsed) = parse_mcp_body(&body)
     {
-        return resp;
+        return handle_mcp_post(&state, path, &headers, &body, parsed, start).await;
     }
 
     // 3. MCP SSE GET (text/event-stream) → stream from mcp_upstream
     if method == Method::GET && is_mcp_sse(&headers) {
         let upstream_url = state.mcp_upstream.trim_end_matches('/').to_string();
+        let upstream_start = Instant::now();
         return match forward_request(
             &state,
             &upstream_url,
@@ -200,11 +202,15 @@ async fn handle_request(
         .await
         {
             Ok(resp) => {
+                let upstream_ms = upstream_start.elapsed().as_millis() as u64;
                 let status = resp.status().as_u16();
                 let resp_headers = resp.headers().clone();
                 log_request(
                     &state.tui_state,
-                    LogEntry::new("GET", path, status, "sse").upstream(&upstream_url),
+                    LogEntry::new("GET", path, status, "sse")
+                        .upstream(&upstream_url)
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 build_response(
                     status,
@@ -213,9 +219,13 @@ async fn handle_request(
                 )
             }
             Err(e) => {
+                let upstream_ms = upstream_start.elapsed().as_millis() as u64;
                 log_request(
                     &state.tui_state,
-                    LogEntry::new("GET", path, 502, "upstream error").upstream(&upstream_url),
+                    LogEntry::new("GET", path, 502, "upstream error")
+                        .upstream(&upstream_url)
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 (StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response()
             }
@@ -225,49 +235,49 @@ async fn handle_request(
     // 4. Everything else (DELETE, well-known, oauth, GET, POST) → MCP upstream + path
     let (base, _) = split_upstream(&state.mcp_upstream);
     let upstream_url = format!("{}{}", base.trim_end_matches('/'), path);
-    forward_and_passthrough(&state, &upstream_url, method, path, &headers, &body).await
+    forward_and_passthrough(&state, &upstream_url, method, path, &headers, &body, start).await
 }
 
-/// Handle MCP JSON-RPC POST — parse, intercept resources/read, rewrite response.
-/// Returns None if the body is not JSON-RPC (no "jsonrpc" field), so caller can
-/// fall through to passthrough routing (e.g. OAuth /register, /token).
+/// Handle MCP JSON-RPC POST — intercept resources/read, forward, rewrite response.
+/// The body has already been validated as JSON-RPC 2.0 by `parse_mcp_body`.
 async fn handle_mcp_post(
     state: &AppState,
     path: &str,
     headers: &HeaderMap,
     body: &Bytes,
-) -> Option<Response> {
-    // Parse JSON to detect if it's JSON-RPC
-    let parsed: Value = serde_json::from_slice(body).ok()?;
+    parsed: jsonrpc::ParsedBody,
+    start: Instant,
+) -> Response {
+    let mcp_method = parsed.mcp_method();
+    let method_str = mcp_method.as_str();
 
-    // Must have "jsonrpc" field to be treated as MCP JSON-RPC
-    parsed.get("jsonrpc")?; // Must have "jsonrpc" field to be treated as MCP JSON-RPC
-
-    let method = parsed
-        .get("method")
-        .and_then(|m| m.as_str())
-        .unwrap_or("unknown");
-
-    // Check if this is resources/read and we should intercept
-    if method == "resources/read"
-        && state.widget_source.is_some()
-        && let Some(response) = handle_resources_read(state, headers, body, &parsed).await
-    {
-        return Some(response);
+    // Intercept resources/read for widget HTML serving (single requests only)
+    if mcp_method == McpMethod::ResourcesRead && !parsed.is_batch && state.widget_source.is_some() {
+        // Re-parse as Value for the interception logic
+        if let Ok(json_val) = serde_json::from_slice::<Value>(body)
+            && let Some(response) =
+                handle_resources_read(state, headers, body, &json_val, start).await
+        {
+            return response;
+        }
     }
 
     // Forward to upstream MCP URL
     let upstream_url = state.mcp_upstream.trim_end_matches('/').to_string();
+    let upstream_start = Instant::now();
     let resp = match forward_request(state, &upstream_url, Method::POST, headers, body).await {
         Ok(r) => r,
         Err(e) => {
+            let upstream_ms = upstream_start.elapsed().as_millis() as u64;
             log_request(
                 &state.tui_state,
                 LogEntry::new("POST", path, 502, "upstream error")
-                    .mcp_method(method)
-                    .upstream(&upstream_url),
+                    .mcp_method(method_str)
+                    .upstream(&upstream_url)
+                    .upstream_duration(upstream_ms)
+                    .duration(start),
             );
-            return Some((StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response());
+            return (StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response();
         }
     };
 
@@ -276,6 +286,7 @@ async fn handle_mcp_post(
 
     // Collect full body for rewriting (POST SSE is finite)
     let resp_bytes = resp.bytes().await.unwrap_or_default();
+    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
     let config = state.rewrite_config.read().await;
 
     // Try to parse and rewrite JSON response (may be SSE-wrapped)
@@ -284,35 +295,37 @@ async fn handle_mcp_post(
         None => (resp_bytes.to_vec(), false),
     };
 
-    Some(
-        if let Ok(mut json_body) = serde_json::from_slice::<Value>(&json_bytes) {
-            rewrite_response(method, &mut json_body, &config);
-            let rewritten = serde_json::to_vec(&json_body).unwrap_or(json_bytes);
-            let body = if is_sse {
-                wrap_as_sse(&rewritten)
-            } else {
-                rewritten
-            };
-            let note = if is_sse { "rewritten+sse" } else { "rewritten" };
-            log_request(
-                &state.tui_state,
-                LogEntry::new("POST", path, status, note)
-                    .mcp_method(method)
-                    .upstream(&upstream_url)
-                    .size(body.len()),
-            );
-            build_response(status, &resp_headers, Body::from(body))
+    if let Ok(mut json_body) = serde_json::from_slice::<Value>(&json_bytes) {
+        rewrite_response(method_str, &mut json_body, &config);
+        let rewritten = serde_json::to_vec(&json_body).unwrap_or(json_bytes);
+        let body = if is_sse {
+            wrap_as_sse(&rewritten)
         } else {
-            log_request(
-                &state.tui_state,
-                LogEntry::new("POST", path, status, "passthrough")
-                    .mcp_method(method)
-                    .upstream(&upstream_url)
-                    .size(resp_bytes.len()),
-            );
-            build_response(status, &resp_headers, Body::from(resp_bytes))
-        },
-    )
+            rewritten
+        };
+        let note = if is_sse { "rewritten+sse" } else { "rewritten" };
+        log_request(
+            &state.tui_state,
+            LogEntry::new("POST", path, status, note)
+                .mcp_method(method_str)
+                .upstream(&upstream_url)
+                .size(body.len())
+                .upstream_duration(upstream_ms)
+                .duration(start),
+        );
+        build_response(status, &resp_headers, Body::from(body))
+    } else {
+        log_request(
+            &state.tui_state,
+            LogEntry::new("POST", path, status, "passthrough")
+                .mcp_method(method_str)
+                .upstream(&upstream_url)
+                .size(resp_bytes.len())
+                .upstream_duration(upstream_ms)
+                .duration(start),
+        );
+        build_response(status, &resp_headers, Body::from(resp_bytes))
+    }
 }
 
 /// Handle resources/read interception: serve local widget HTML + upstream metadata.
@@ -321,6 +334,7 @@ async fn handle_resources_read(
     headers: &HeaderMap,
     raw_body: &Bytes,
     parsed: &Value,
+    start: Instant,
 ) -> Option<Response> {
     let uri = parsed
         .get("params")
@@ -334,11 +348,13 @@ async fn handle_resources_read(
 
     // Forward to upstream to get the metadata
     let upstream_url = state.mcp_upstream.trim_end_matches('/').to_string();
+    let upstream_start = Instant::now();
     let upstream_resp = forward_request(state, &upstream_url, Method::POST, headers, raw_body)
         .await
         .ok()?;
 
     let upstream_bytes = upstream_resp.bytes().await.ok()?;
+    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
     let json_bytes =
         extract_json_from_sse(&upstream_bytes).unwrap_or_else(|| upstream_bytes.to_vec());
     let mut json_body: Value = serde_json::from_slice(&json_bytes).ok()?;
@@ -357,15 +373,17 @@ async fn handle_resources_read(
     }
 
     let config = state.rewrite_config.read().await;
-    rewrite_response("resources/read", &mut json_body, &config);
+    rewrite_response(jsonrpc::RESOURCES_READ, &mut json_body, &config);
     drop(config);
 
     let body = serde_json::to_vec(&json_body).unwrap_or_default();
     log_request(
         &state.tui_state,
         LogEntry::new("POST", "/*", 200, "intercepted")
-            .mcp_method("resources/read")
-            .size(body.len()),
+            .mcp_method(jsonrpc::RESOURCES_READ)
+            .size(body.len())
+            .upstream_duration(upstream_ms)
+            .duration(start),
     );
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -380,12 +398,15 @@ async fn forward_and_passthrough(
     log_path: &str,
     headers: &HeaderMap,
     body: &Bytes,
+    start: Instant,
 ) -> Response {
+    let upstream_start = Instant::now();
     match forward_request(state, url, method.clone(), headers, body).await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let resp_headers = resp.headers().clone();
             let bytes = resp.bytes().await.unwrap_or_default();
+            let upstream_ms = upstream_start.elapsed().as_millis() as u64;
 
             // Rewrite upstream base URL → proxy URL in JSON responses
             // (e.g. OAuth metadata: registration_endpoint, issuer, etc.)
@@ -409,7 +430,9 @@ async fn forward_and_passthrough(
                     &state.tui_state,
                     LogEntry::new(method.as_str(), log_path, status, "rewritten")
                         .upstream(url)
-                        .size(rewritten_bytes.len()),
+                        .size(rewritten_bytes.len())
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 build_response(status, &resp_headers, Body::from(rewritten_bytes))
             } else {
@@ -417,15 +440,21 @@ async fn forward_and_passthrough(
                     &state.tui_state,
                     LogEntry::new(method.as_str(), log_path, status, "passthrough")
                         .upstream(url)
-                        .size(bytes.len()),
+                        .size(bytes.len())
+                        .upstream_duration(upstream_ms)
+                        .duration(start),
                 );
                 build_response(status, &resp_headers, Body::from(bytes))
             }
         }
         Err(e) => {
+            let upstream_ms = upstream_start.elapsed().as_millis() as u64;
             log_request(
                 &state.tui_state,
-                LogEntry::new(method.as_str(), log_path, 502, "upstream error").upstream(url),
+                LogEntry::new(method.as_str(), log_path, 502, "upstream error")
+                    .upstream(url)
+                    .upstream_duration(upstream_ms)
+                    .duration(start),
             );
             (StatusCode::BAD_GATEWAY, format!("Upstream error: {e}")).into_response()
         }
@@ -576,36 +605,56 @@ mod tests {
         assert_eq!(path, "/");
     }
 
-    // ── is_mcp_post ──
+    // ── parse_mcp_body (JSON-RPC 2.0 detection) ──
 
     #[test]
-    fn is_mcp_json_post() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-        assert!(is_mcp_post(&headers));
+    fn detect_mcp_jsonrpc_request() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let parsed = parse_mcp_body(&Bytes::from_static(body));
+        assert!(parsed.is_some());
+        let p = parsed.unwrap();
+        assert_eq!(p.method_str(), "tools/list");
+        assert!(!p.is_batch);
     }
 
     #[test]
-    fn is_mcp_json_with_charset() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            "application/json; charset=utf-8".parse().unwrap(),
-        );
-        assert!(is_mcp_post(&headers));
+    fn detect_mcp_jsonrpc_notification() {
+        let body = br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let parsed = parse_mcp_body(&Bytes::from_static(body));
+        assert!(parsed.is_some());
+        assert!(parsed.unwrap().is_notification_only());
     }
 
     #[test]
-    fn is_not_mcp_post_html() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::CONTENT_TYPE, "text/html".parse().unwrap());
-        assert!(!is_mcp_post(&headers));
+    fn detect_mcp_jsonrpc_batch() {
+        let body = br#"[{"jsonrpc":"2.0","id":1,"method":"tools/list"},{"jsonrpc":"2.0","id":2,"method":"resources/list"}]"#;
+        let parsed = parse_mcp_body(&Bytes::from_static(body));
+        assert!(parsed.is_some());
+        assert!(parsed.unwrap().is_batch);
     }
 
     #[test]
-    fn is_not_mcp_post_no_content_type() {
-        let headers = HeaderMap::new();
-        assert!(!is_mcp_post(&headers));
+    fn reject_oauth_register_json() {
+        // OAuth /register POST — valid JSON but not JSON-RPC
+        let body = br#"{"client_name":"My App","redirect_uris":["https://example.com/cb"]}"#;
+        assert!(parse_mcp_body(&Bytes::from_static(body)).is_none());
+    }
+
+    #[test]
+    fn reject_form_encoded() {
+        let body = b"grant_type=client_credentials&client_id=abc";
+        assert!(parse_mcp_body(&Bytes::from_static(body)).is_none());
+    }
+
+    #[test]
+    fn reject_empty_body() {
+        assert!(parse_mcp_body(&Bytes::new()).is_none());
+    }
+
+    #[test]
+    fn reject_wrong_jsonrpc_version() {
+        let body = br#"{"jsonrpc":"1.0","id":1,"method":"test"}"#;
+        assert!(parse_mcp_body(&Bytes::from_static(body)).is_none());
     }
 
     // ── is_mcp_sse ──

@@ -169,6 +169,9 @@ fn render_log_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) {
     let visible_height = inner.height as usize;
 
     // Build log lines
+    //
+    // MCP requests:    HH:MM:SS POST  tools/call      200  1.2KB  45ms  rewritten
+    // Other requests:  HH:MM:SS GET   /oauth/register  201  232B   8ms  rewritten
     let log_lines: Vec<Line> = s
         .log_entries
         .iter()
@@ -181,37 +184,100 @@ fn render_log_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) {
                 Color::Red
             };
 
-            let method_style = Style::default().add_modifier(Modifier::BOLD);
+            let method_color = match entry.method.as_str() {
+                "POST" => Color::Cyan,
+                "GET" => Color::Green,
+                "DELETE" => Color::Red,
+                _ => Color::White,
+            };
+
+            // Layout: time  METHOD  status  size  upstream↑  proxy↓  label
+            // Fixed-width columns first, variable-length label last (never truncated)
 
             let mut spans = vec![
                 Span::styled(
-                    format!("  {} ", entry.timestamp),
+                    format!(" {} ", entry.timestamp),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(format!("{:<4} ", entry.method), method_style),
-                Span::raw(format!("{} ", entry.path)),
+                Span::styled(
+                    format!("{:<5}", entry.method),
+                    Style::default()
+                        .fg(method_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<4}", entry.status),
+                    Style::default().fg(status_color),
+                ),
             ];
 
-            if let Some(ref mcp) = entry.mcp_method {
-                spans.push(Span::styled(
-                    format!("{mcp} "),
-                    Style::default().fg(Color::Yellow),
-                ));
-            }
-
-            spans.push(Span::styled("→ ", Style::default().fg(Color::DarkGray)));
+            // Size
+            let size_str = match entry.resp_size {
+                Some(size) => format!("{:>7}", format_bytes(size)),
+                None => "      -".to_string(),
+            };
             spans.push(Span::styled(
-                format!("{}", entry.status),
-                Style::default().fg(status_color),
+                format!("{size_str} "),
+                Style::default().fg(Color::DarkGray),
             ));
 
-            if let Some(size) = entry.resp_size {
+            // Duration: total | upstream↑ proxy↓
+            match (entry.duration_ms, entry.upstream_ms) {
+                (Some(total), Some(upstream)) => {
+                    let proxy = total.saturating_sub(upstream);
+                    spans.push(Span::styled(
+                        format!("{:>5} ", format_duration(total)),
+                        Style::default()
+                            .fg(duration_color(total))
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled(
+                        format!("{:>5}↑", format_duration(upstream)),
+                        Style::default().fg(duration_color(upstream)),
+                    ));
+                    spans.push(Span::styled(
+                        format!("{:>5}↓ ", format_duration(proxy)),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+                (Some(total), None) => {
+                    spans.push(Span::styled(
+                        format!("{:>5} ", format_duration(total)),
+                        Style::default()
+                            .fg(duration_color(total))
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::raw("            "));
+                }
+                _ => {
+                    spans.push(Span::styled(
+                        "    -              ",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+
+            // Label — MCP method (yellow) or path, full length at the end
+            if let Some(ref mcp) = entry.mcp_method {
                 spans.push(Span::styled(
-                    format!(" {}", format_bytes(size)),
+                    mcp.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::raw(entry.path.clone()));
+            }
+
+            // Upstream URL
+            if let Some(ref url) = entry.upstream_url {
+                spans.push(Span::styled(
+                    format!(" → {url}"),
                     Style::default().fg(Color::DarkGray),
                 ));
             }
 
+            // Note (rewritten, passthrough, sse, etc.)
             if !entry.note.is_empty() {
                 spans.push(Span::styled(
                     format!(" {}", entry.note),
@@ -259,5 +325,23 @@ fn format_bytes(bytes: usize) -> String {
         format!("{:.1}KB", bytes as f64 / 1024.0)
     } else {
         format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn format_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
+fn duration_color(ms: u64) -> Color {
+    if ms < 100 {
+        Color::Green
+    } else if ms < 500 {
+        Color::Yellow
+    } else {
+        Color::Red
     }
 }

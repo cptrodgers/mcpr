@@ -1,5 +1,6 @@
 mod config;
 mod display;
+mod jsonrpc;
 mod proxy;
 mod relay;
 mod rewrite;
