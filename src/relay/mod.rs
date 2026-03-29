@@ -52,6 +52,18 @@ pub struct RegisterAck {
     pub url: String,
 }
 
+/// Sent by relay when client didn't specify a subdomain and auth returned allowed list.
+#[derive(Serialize, Deserialize)]
+pub struct SubdomainOffer {
+    pub subdomains: Vec<String>,
+}
+
+/// Sent by client to pick a subdomain from the offered list.
+#[derive(Serialize, Deserialize)]
+pub struct SubdomainPick {
+    pub subdomain: String,
+}
+
 // ── Relay server ────────────────────────────────────────────────────────
 
 type PendingRequests = Arc<RwLock<HashMap<String, oneshot::Sender<TunnelResponse>>>>;
@@ -172,46 +184,121 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
     };
 
     let token = reg.token;
-    let subdomain = reg.subdomain.unwrap_or_else(|| token_to_subdomain(&token));
+    let requested_subdomain = reg.subdomain;
 
-    // Validate token based on auth mode
-    let reject = match &state.auth {
-        AuthMode::Open => None,
-        AuthMode::Static(tokens) => match tokens.get(&token) {
-            Some(allowed) if subdomain_matches(allowed, &subdomain) => None,
-            Some(_) => Some(format!(
-                "subdomain '{}' not authorized for this token",
-                subdomain
-            )),
-            None => Some("invalid token".into()),
-        },
-        AuthMode::Provider(auth) => match verify_token(auth, &token, &subdomain).await {
-            Ok(allowed) if subdomain_matches(&allowed, &subdomain) => None,
-            Ok(_) => Some(format!(
-                "subdomain '{}' not authorized for this token",
-                subdomain
-            )),
-            Err(AuthError::InvalidToken(msg)) => Some(msg),
-            Err(AuthError::ProviderUnavailable(msg)) => {
-                println!(
-                    "  {} auth provider error: {}",
-                    colored::Colorize::red("✗"),
-                    msg
-                );
-                Some("auth provider unavailable".into())
-            }
-        },
-    };
-
-    if let Some(reason) = reject {
+    // Helper to close with error
+    async fn close_with_error(
+        ws_sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+        reason: &str,
+    ) {
         let _ = ws_sink
             .send(Message::Close(Some(axum::extract::ws::CloseFrame {
                 code: 4001,
                 reason: reason.into(),
             })))
             .await;
-        return;
     }
+
+    // Helper to offer subdomains and wait for client pick
+    async fn offer_and_pick(
+        ws_sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+        ws_stream: &mut futures_util::stream::SplitStream<WebSocket>,
+        allowed: &[String],
+    ) -> Option<String> {
+        let offer = SubdomainOffer {
+            subdomains: allowed.to_vec(),
+        };
+        if ws_sink
+            .send(Message::Text(serde_json::to_string(&offer).unwrap().into()))
+            .await
+            .is_err()
+        {
+            return None;
+        }
+        // Wait for SubdomainPick
+        loop {
+            match ws_stream.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(pick) = serde_json::from_str::<SubdomainPick>(&text) {
+                        return Some(pick.subdomain);
+                    }
+                    continue;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    // Validate token and resolve subdomain based on auth mode
+    let subdomain = match &state.auth {
+        AuthMode::Open => requested_subdomain.unwrap_or_else(|| token_to_subdomain(&token)),
+        AuthMode::Static(tokens) => match tokens.get(&token) {
+            Some(allowed) => {
+                let sub = if let Some(sub) = requested_subdomain {
+                    sub
+                } else if allowed.len() == 1 && !allowed[0].contains('*') {
+                    allowed[0].clone()
+                } else {
+                    match offer_and_pick(&mut ws_sink, &mut ws_stream, allowed).await {
+                        Some(s) => s,
+                        None => return,
+                    }
+                };
+                if !subdomain_matches(allowed, &sub) {
+                    close_with_error(
+                        &mut ws_sink,
+                        &format!("subdomain '{}' not authorized for this token", sub),
+                    )
+                    .await;
+                    return;
+                }
+                sub
+            }
+            None => {
+                close_with_error(&mut ws_sink, "invalid token").await;
+                return;
+            }
+        },
+        AuthMode::Provider(auth) => {
+            let sub_for_verify = requested_subdomain.as_deref().unwrap_or("");
+            match verify_token(auth, &token, sub_for_verify).await {
+                Ok(allowed) => {
+                    let sub = if let Some(sub) = requested_subdomain {
+                        sub
+                    } else if allowed.len() == 1 && !allowed[0].contains('*') {
+                        allowed[0].clone()
+                    } else {
+                        match offer_and_pick(&mut ws_sink, &mut ws_stream, &allowed).await {
+                            Some(s) => s,
+                            None => return,
+                        }
+                    };
+                    if !subdomain_matches(&allowed, &sub) {
+                        close_with_error(
+                            &mut ws_sink,
+                            &format!("subdomain '{}' not authorized for this token", sub),
+                        )
+                        .await;
+                        return;
+                    }
+                    sub
+                }
+                Err(AuthError::InvalidToken(msg)) => {
+                    close_with_error(&mut ws_sink, &msg).await;
+                    return;
+                }
+                Err(AuthError::ProviderUnavailable(msg)) => {
+                    println!(
+                        "  {} auth provider error: {}",
+                        colored::Colorize::red("✗"),
+                        msg
+                    );
+                    close_with_error(&mut ws_sink, "auth provider unavailable").await;
+                    return;
+                }
+            }
+        }
+    };
 
     let url = format!("https://{}.{}", subdomain, state.base_domain);
 
