@@ -229,30 +229,43 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
         }
     }
 
+    // Resolve subdomain: if requested and allowed → use it; if not allowed or missing → offer pick
+    async fn resolve_subdomain(
+        requested: Option<String>,
+        allowed: &[String],
+        ws_sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+        ws_stream: &mut futures_util::stream::SplitStream<WebSocket>,
+    ) -> Option<String> {
+        // If requested and it matches, use it directly
+        if let Some(ref sub) = requested
+            && subdomain_matches(allowed, sub)
+        {
+            return Some(sub.clone());
+        }
+        // Auto-assign if exactly one concrete subdomain
+        if allowed.len() == 1 && !allowed[0].contains('*') {
+            return Some(allowed[0].clone());
+        }
+        // Otherwise offer the list and let the client pick
+        let picked = offer_and_pick(ws_sink, ws_stream, allowed).await?;
+        if subdomain_matches(allowed, &picked) {
+            Some(picked)
+        } else {
+            close_with_error(
+                ws_sink,
+                &format!("subdomain '{}' not authorized for this token", picked),
+            )
+            .await;
+            None
+        }
+    }
+
     // Validate token and resolve subdomain based on auth mode
     let subdomain = match &state.auth {
-        AuthMode::Open => requested_subdomain.unwrap_or_else(|| token_to_subdomain(&token)),
+        AuthMode::Open => Some(requested_subdomain.unwrap_or_else(|| token_to_subdomain(&token))),
         AuthMode::Static(tokens) => match tokens.get(&token) {
             Some(allowed) => {
-                let sub = if let Some(sub) = requested_subdomain {
-                    sub
-                } else if allowed.len() == 1 && !allowed[0].contains('*') {
-                    allowed[0].clone()
-                } else {
-                    match offer_and_pick(&mut ws_sink, &mut ws_stream, allowed).await {
-                        Some(s) => s,
-                        None => return,
-                    }
-                };
-                if !subdomain_matches(allowed, &sub) {
-                    close_with_error(
-                        &mut ws_sink,
-                        &format!("subdomain '{}' not authorized for this token", sub),
-                    )
-                    .await;
-                    return;
-                }
-                sub
+                resolve_subdomain(requested_subdomain, allowed, &mut ws_sink, &mut ws_stream).await
             }
             None => {
                 close_with_error(&mut ws_sink, "invalid token").await;
@@ -263,25 +276,8 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
             let sub_for_verify = requested_subdomain.as_deref().unwrap_or("");
             match verify_token(auth, &token, sub_for_verify).await {
                 Ok(allowed) => {
-                    let sub = if let Some(sub) = requested_subdomain {
-                        sub
-                    } else if allowed.len() == 1 && !allowed[0].contains('*') {
-                        allowed[0].clone()
-                    } else {
-                        match offer_and_pick(&mut ws_sink, &mut ws_stream, &allowed).await {
-                            Some(s) => s,
-                            None => return,
-                        }
-                    };
-                    if !subdomain_matches(&allowed, &sub) {
-                        close_with_error(
-                            &mut ws_sink,
-                            &format!("subdomain '{}' not authorized for this token", sub),
-                        )
-                        .await;
-                        return;
-                    }
-                    sub
+                    resolve_subdomain(requested_subdomain, &allowed, &mut ws_sink, &mut ws_stream)
+                        .await
                 }
                 Err(AuthError::InvalidToken(msg)) => {
                     close_with_error(&mut ws_sink, &msg).await;
@@ -298,6 +294,11 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
                 }
             }
         }
+    };
+
+    let subdomain = match subdomain {
+        Some(s) => s,
+        None => return,
     };
 
     let url = format!("https://{}.{}", subdomain, state.base_domain);
