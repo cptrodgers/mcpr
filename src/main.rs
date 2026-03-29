@@ -1,6 +1,7 @@
 mod config;
 mod display;
 mod jsonrpc;
+mod onboarding;
 mod proxy;
 mod relay;
 mod rewrite;
@@ -75,19 +76,50 @@ async fn run_gateway(cfg: GatewayConfig) {
         tui_state.lock().unwrap().tunnel_status = tui::ConnectionStatus::Connected;
         format!("http://localhost:{actual_port}")
     } else {
-        let relay_url = cfg
-            .relay_url
-            .as_deref()
-            .expect("relay_url is required in mcpr.toml or --relay-url");
+        let relay_url = cfg.relay_url.as_deref().unwrap();
         let config_path = cfg.config_path.clone();
-        let (token, desired_subdomain) =
+
+        // If using tunnel.mcpr.app without a token, run the interactive claim flow
+        let is_mcpr_relay = relay_url.contains("tunnel.mcpr.app");
+        let (token, desired_subdomain) = if is_mcpr_relay && cfg.tunnel_token.is_none() {
+            eprintln!(
+                "\n  {} Welcome! Let's set up your tunnel.\n",
+                colored::Colorize::cyan("→"),
+            );
+            match onboarding::run_claim_flow(cfg.tunnel_subdomain.as_deref()).await {
+                Ok((token, subdomain)) => {
+                    if let Some(path) = &config_path {
+                        GatewayConfig::save_tunnel_config(path, &token, &subdomain);
+                    }
+                    eprintln!(
+                        "\n  {} We sent a verification link to your email.",
+                        colored::Colorize::yellow("!"),
+                    );
+                    eprintln!(
+                        "  {} Verify to keep '{}' permanently — it's reserved for 72 hours.\n",
+                        colored::Colorize::yellow("!"),
+                        subdomain,
+                    );
+                    (token, Some(subdomain))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}: Onboarding failed: {}",
+                        colored::Colorize::red("error"),
+                        e
+                    );
+                    std::process::exit(1);
+                }
+            }
+        } else {
             GatewayConfig::resolve_tunnel_identity(cfg.tunnel_subdomain, cfg.tunnel_token, || {
                 let new_token = uuid::Uuid::new_v4().to_string();
                 if let Some(path) = &config_path {
                     GatewayConfig::save_tunnel_token(path, &new_token);
                 }
                 new_token
-            });
+            })
+        };
 
         tui_state.lock().unwrap().tunnel_status = tui::ConnectionStatus::Connecting;
 

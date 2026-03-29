@@ -187,7 +187,7 @@ fn render_info_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) 
     lines.extend([
         Line::from(""),
         Line::from(Span::styled(
-            "  q quit  ↑↓ scroll  tab switch",
+            "  ctrl+c quit  ↑↓ scroll  tab switch",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
