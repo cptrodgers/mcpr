@@ -60,7 +60,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/tunnel.yourdomain.com/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -88,7 +88,7 @@ nginx -t && systemctl reload nginx
 
 ```
 *.tunnel.yourdomain.com {
-    reverse_proxy localhost:8081
+    reverse_proxy localhost:8080
 }
 ```
 
@@ -102,7 +102,7 @@ Create `mcpr.toml` on the relay server:
 
 ```toml
 mode = "relay"
-port = 8081
+port = 8080
 
 [relay]
 domain = "tunnel.yourdomain.com"
@@ -112,7 +112,7 @@ domain = "tunnel.yourdomain.com"
 
 ```toml
 mode = "relay"
-port = 8081
+port = 8080
 
 [relay]
 domain = "tunnel.yourdomain.com"
@@ -136,7 +136,7 @@ See [STATIC_TOKENS.md](STATIC_TOKENS.md) for real-world scenarios (team setup, C
 
 ```toml
 mode = "relay"
-port = 8081
+port = 8080
 
 [relay]
 domain = "tunnel.yourdomain.com"
@@ -169,7 +169,7 @@ The relay itself has no database -- it delegates all auth decisions to your prov
 mcpr --relay
 
 # Or with CLI flags (no config file needed):
-mcpr --relay --port 8081 --relay-domain tunnel.yourdomain.com
+mcpr --relay --port 8080 --relay-domain tunnel.yourdomain.com
 ```
 
 ### With Docker
@@ -178,7 +178,7 @@ mcpr --relay --port 8081 --relay-domain tunnel.yourdomain.com
 docker run -d \
   --name mcpr-relay \
   --restart unless-stopped \
-  -p 8081:8080 \
+  -p 8080:8080 \
   ghcr.io/cptrodgers/mcpr:latest \
   --relay --port 8080 --relay-domain tunnel.yourdomain.com
 ```
@@ -189,7 +189,7 @@ To enable auth via Docker, pass environment variables:
 docker run -d \
   --name mcpr-relay \
   --restart unless-stopped \
-  -p 8081:8080 \
+  -p 8080:8080 \
   -e MCPR_AUTH_PROVIDER=https://auth.yourdomain.com \
   -e MCPR_AUTH_PROVIDER_SECRET=your-shared-secret-here \
   ghcr.io/cptrodgers/mcpr:latest \
