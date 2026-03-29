@@ -499,4 +499,78 @@ mod tests {
         assert_eq!(token, "generated-uuid");
         assert_eq!(sub, None);
     }
+
+    #[test]
+    fn save_tunnel_config_creates_section_in_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcpr.toml");
+        std::fs::write(&path, "").unwrap();
+
+        GatewayConfig::save_tunnel_config(&path, "tok123", "myapp");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("[tunnel]"));
+        assert!(contents.contains("token = \"tok123\""));
+        assert!(contents.contains("subdomain = \"myapp\""));
+    }
+
+    #[test]
+    fn save_tunnel_config_appends_section_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcpr.toml");
+        std::fs::write(&path, "port = 8080\n").unwrap();
+
+        GatewayConfig::save_tunnel_config(&path, "tok456", "demo");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("port = 8080"));
+        assert!(contents.contains("[tunnel]"));
+        assert!(contents.contains("token = \"tok456\""));
+        assert!(contents.contains("subdomain = \"demo\""));
+    }
+
+    #[test]
+    fn save_tunnel_config_inserts_under_existing_tunnel_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcpr.toml");
+        std::fs::write(&path, "[tunnel]\nrelay_url = \"https://tunnel.mcpr.app\"\n").unwrap();
+
+        GatewayConfig::save_tunnel_config(&path, "tok789", "example");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("relay_url = \"https://tunnel.mcpr.app\""));
+        assert!(contents.contains("token = \"tok789\""));
+        assert!(contents.contains("subdomain = \"example\""));
+    }
+
+    #[test]
+    fn save_tunnel_config_does_not_duplicate_existing_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcpr.toml");
+        std::fs::write(
+            &path,
+            "[tunnel]\ntoken = \"existing\"\nsubdomain = \"taken\"\n",
+        )
+        .unwrap();
+
+        GatewayConfig::save_tunnel_config(&path, "new-tok", "new-sub");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        // Original values should be preserved, not duplicated
+        assert_eq!(contents.matches("token =").count(), 1);
+        assert_eq!(contents.matches("subdomain =").count(), 1);
+        assert!(contents.contains("token = \"existing\""));
+        assert!(contents.contains("subdomain = \"taken\""));
+    }
+
+    #[test]
+    fn save_tunnel_config_fails_gracefully_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.toml");
+
+        // Should not panic — just prints a warning
+        GatewayConfig::save_tunnel_config(&path, "tok", "sub");
+
+        assert!(!path.exists());
+    }
 }

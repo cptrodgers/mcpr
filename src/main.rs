@@ -88,9 +88,14 @@ async fn run_gateway(cfg: GatewayConfig) {
             );
             match onboarding::run_claim_flow(cfg.tunnel_subdomain.as_deref()).await {
                 Ok((token, subdomain)) => {
-                    if let Some(path) = &config_path {
-                        GatewayConfig::save_tunnel_config(path, &token, &subdomain);
+                    let save_path = config_path
+                        .clone()
+                        .unwrap_or_else(|| std::env::current_dir().unwrap().join("mcpr.toml"));
+                    // Create the file if it doesn't exist so save_tunnel_config can read+update it
+                    if !save_path.exists() {
+                        let _ = std::fs::write(&save_path, "");
                     }
+                    GatewayConfig::save_tunnel_config(&save_path, &token, &subdomain);
                     eprintln!(
                         "\n  {} We sent a verification link to your email.",
                         colored::Colorize::yellow("!"),
