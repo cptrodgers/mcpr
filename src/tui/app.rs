@@ -44,7 +44,6 @@ pub fn run(state: SharedTuiState, sessions: MemorySessionStore) -> io::Result<()
             }
             match key.code {
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                KeyCode::Char('q') => break,
                 KeyCode::Tab | KeyCode::BackTab => {
                     let mut s = state.lock().unwrap();
                     s.active_tab = match s.active_tab {

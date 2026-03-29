@@ -326,6 +326,60 @@ impl GatewayConfig {
             }
         }
     }
+
+    /// Save both tunnel token and subdomain to the config file.
+    pub fn save_tunnel_config(path: &std::path::Path, token: &str, subdomain: &str) {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                let mut new_contents = contents.clone();
+
+                if new_contents.contains("[tunnel]") {
+                    // Insert under existing [tunnel] section if keys are missing
+                    let mut insert = String::new();
+                    if !new_contents.contains("token =") && !new_contents.contains("token=") {
+                        insert.push_str(&format!("token = \"{token}\"\n"));
+                    }
+                    if !new_contents.contains("subdomain =") && !new_contents.contains("subdomain=")
+                    {
+                        insert.push_str(&format!("subdomain = \"{subdomain}\"\n"));
+                    }
+                    if !insert.is_empty() {
+                        new_contents =
+                            new_contents.replacen("[tunnel]", &format!("[tunnel]\n{insert}"), 1);
+                    }
+                } else {
+                    // No [tunnel] section — append one
+                    new_contents = format!(
+                        "{}\n\n[tunnel]\ntoken = \"{token}\"\nsubdomain = \"{subdomain}\"\n",
+                        new_contents.trim_end()
+                    );
+                }
+
+                if let Err(e) = std::fs::write(path, &new_contents) {
+                    eprintln!(
+                        "  {}: failed to save tunnel config to {}: {}",
+                        colored::Colorize::yellow("warn"),
+                        path.display(),
+                        e
+                    );
+                } else {
+                    eprintln!(
+                        "  {} saved tunnel config to {}",
+                        colored::Colorize::dimmed("config"),
+                        path.display()
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {}: failed to read {}: {}",
+                    colored::Colorize::yellow("warn"),
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
 }
 
 // ── Load + dispatch ─────────────────────────────────────────────────────
@@ -389,7 +443,11 @@ fn load_gateway(cli: Cli, file: FileConfig, config_path: Option<std::path::PathB
         port: cli.port.or(file.port),
         csp_domains,
         csp_mode,
-        relay_url: cli.relay_url.or(tunnel_relay_url),
+        relay_url: Some(
+            cli.relay_url
+                .or(tunnel_relay_url)
+                .unwrap_or_else(|| "https://tunnel.mcpr.app".to_string()),
+        ),
         tunnel_token,
         tunnel_subdomain,
         no_tunnel: cli.no_tunnel || file.no_tunnel,
