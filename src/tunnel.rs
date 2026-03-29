@@ -107,24 +107,43 @@ pub async fn start_tunnel_client(
             }
         });
 
+        let mut evicted = false;
         while let Some(Ok(msg)) = ws_stream.next().await {
-            if let tokio_tungstenite::tungstenite::Message::Text(text) = msg
-                && let Ok(req) = serde_json::from_str::<TunnelRequest>(&text)
-            {
-                let client = http_client.clone();
-                let base = local_base.clone();
-                let tx = resp_tx.clone();
+            match msg {
+                tokio_tungstenite::tungstenite::Message::Text(text) => {
+                    if let Ok(req) = serde_json::from_str::<TunnelRequest>(&text) {
+                        let client = http_client.clone();
+                        let base = local_base.clone();
+                        let tx = resp_tx.clone();
 
-                tokio::spawn(async move {
-                    let resp = forward_to_local(&client, &base, req).await;
-                    let msg = serde_json::to_string(&resp).unwrap();
-                    let _ = tx.send(msg);
-                });
+                        tokio::spawn(async move {
+                            let resp = forward_to_local(&client, &base, req).await;
+                            let msg = serde_json::to_string(&resp).unwrap();
+                            let _ = tx.send(msg);
+                        });
+                    }
+                }
+                tokio_tungstenite::tungstenite::Message::Close(Some(frame))
+                    if frame.code == tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::from(4002) =>
+                {
+                    eprintln!(
+                        "  {} tunnel evicted: {}",
+                        colored::Colorize::yellow("⇄"),
+                        frame.reason
+                    );
+                    evicted = true;
+                    break;
+                }
+                _ => {}
             }
         }
 
-        // Tunnel disconnected
-        tui_state.lock().unwrap().tunnel_status = crate::tui::ConnectionStatus::Disconnected;
+        // Update status based on disconnect reason
+        tui_state.lock().unwrap().tunnel_status = if evicted {
+            crate::tui::ConnectionStatus::Evicted
+        } else {
+            crate::tui::ConnectionStatus::Disconnected
+        };
 
         send_task.abort();
     });

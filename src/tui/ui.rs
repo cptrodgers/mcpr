@@ -14,11 +14,14 @@ pub fn render(frame: &mut Frame, state: &SharedTuiState, sessions: &MemorySessio
     let s = state.lock().unwrap();
 
     // Size left panel to fit the longest URL + label padding (10) + border (2) + margin (2)
+    // Studio URLs append "/studio" (+7) to proxy and tunnel URLs
+    let studio_extra = if s.tunnel_url.is_empty() { 0 } else { 7 };
     let longest_url = [&s.proxy_url, &s.tunnel_url, &s.mcp_upstream, &s.widgets]
         .iter()
         .map(|u| u.len())
         .max()
-        .unwrap_or(20);
+        .unwrap_or(20)
+        + studio_extra;
     let ideal_width = (longest_url + 14) as u16;
     // Clamp: at least 36, at most 50% of terminal width
     let max_left = frame.area().width / 2;
@@ -60,6 +63,7 @@ fn status_style(status: ConnectionStatus) -> (Color, &'static str) {
         ConnectionStatus::Connected => (Color::Green, "●"),
         ConnectionStatus::Connecting => (Color::Yellow, "◐"),
         ConnectionStatus::Disconnected => (Color::Red, "○"),
+        ConnectionStatus::Evicted => (Color::Magenta, "⇄"),
         ConnectionStatus::Unknown => (Color::DarkGray, "?"),
     }
 }
@@ -172,6 +176,13 @@ fn render_info_panel(frame: &mut Frame, area: Rect, s: &super::state::TuiState) 
         Span::styled("  Studio  ", Style::default().fg(Color::DarkGray)),
         Span::styled(studio_url, Style::default().fg(Color::Cyan)),
     ]));
+    if !s.tunnel_url.is_empty() {
+        let tunnel_studio_url = format!("{}/studio", s.tunnel_url);
+        lines.push(Line::from(vec![
+            Span::styled("          ", Style::default().fg(Color::DarkGray)),
+            Span::styled(tunnel_studio_url, Style::default().fg(Color::Cyan)),
+        ]));
+    }
 
     lines.extend([
         Line::from(""),
