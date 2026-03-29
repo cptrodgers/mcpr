@@ -16,6 +16,7 @@ pub enum ConnectionStatus {
     Disconnected,
     Connecting,
     Connected,
+    Evicted,
 }
 
 impl ConnectionStatus {
@@ -25,6 +26,7 @@ impl ConnectionStatus {
             Self::Disconnected => "Disconnected",
             Self::Connecting => "Connecting…",
             Self::Connected => "Connected",
+            Self::Evicted => "Evicted",
         }
     }
 }

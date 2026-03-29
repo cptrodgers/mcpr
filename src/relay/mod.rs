@@ -12,6 +12,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use base64::Engine;
+use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -72,11 +73,13 @@ type TunnelSender = tokio::sync::mpsc::UnboundedSender<String>;
 struct TunnelConnection {
     sender: TunnelSender,
     pending: PendingRequests,
+    /// Signal to notify the tunnel handler it has been evicted.
+    evict: tokio::sync::Notify,
 }
 
 struct RelayState {
     /// subdomain → active tunnel connection
-    tunnels: RwLock<HashMap<String, Arc<TunnelConnection>>>,
+    tunnels: DashMap<String, Arc<TunnelConnection>>,
     /// Base domain for tunnel URLs
     base_domain: String,
     /// Auth mode for token validation
@@ -139,7 +142,7 @@ pub async fn start_relay(cfg: RelayConfig) {
     };
 
     let state = Arc::new(RelayState {
-        tunnels: RwLock::new(HashMap::new()),
+        tunnels: DashMap::new(),
         base_domain: cfg.relay_domain,
         auth,
     });
@@ -323,10 +326,22 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
     let conn = Arc::new(TunnelConnection {
         sender: tx,
         pending: pending.clone(),
+        evict: tokio::sync::Notify::new(),
     });
 
+    // Evict existing tunnel on same subdomain (if any) before registering
+    if let Some((_, old)) = state.tunnels.remove(&subdomain) {
+        old.evict.notify_one();
+        println!(
+            "  {} evicted old tunnel: {}",
+            colored::Colorize::yellow("⇄"),
+            subdomain
+        );
+    }
+
     // Register tunnel
-    state.tunnels.write().await.insert(subdomain.clone(), conn);
+    let conn_for_evict = conn.clone();
+    state.tunnels.insert(subdomain.clone(), conn);
 
     println!(
         "  {} tunnel registered: {}",
@@ -334,11 +349,30 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
         colored::Colorize::cyan(url.as_str())
     );
 
-    // Spawn task to forward outbound messages (relay → client) from channel to WS
+    // Spawn task to forward outbound messages (relay → client) from channel to WS.
+    // Also listens for eviction signal to send a close frame with reason.
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if ws_sink.send(Message::Text(msg.into())).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(msg) => {
+                            if ws_sink.send(Message::Text(msg.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                () = conn_for_evict.evict.notified() => {
+                    let _ = ws_sink
+                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: 4002,
+                            reason: "evicted: another client registered with the same tunnel".into(),
+                        })))
+                        .await;
+                    break;
+                }
             }
         }
     });
@@ -357,7 +391,7 @@ async fn handle_tunnel_ws(socket: WebSocket, state: Arc<RelayState>) {
 
     // Client disconnected — clean up
     send_task.abort();
-    state.tunnels.write().await.remove(&subdomain);
+    state.tunnels.remove(&subdomain);
     println!(
         "  {} tunnel disconnected: {}",
         colored::Colorize::red("↓"),
@@ -397,8 +431,7 @@ async fn handle_tunnel_request(
     }
 
     // Find tunnel connection
-    let tunnels = state.tunnels.read().await;
-    let conn = match tunnels.get(&subdomain) {
+    let conn = match state.tunnels.get(&subdomain) {
         Some(c) => c.clone(),
         None => {
             relay_log(
@@ -412,7 +445,6 @@ async fn handle_tunnel_request(
             return (StatusCode::BAD_GATEWAY, "tunnel not found").into_response();
         }
     };
-    drop(tunnels);
 
     // Build tunnel request
     let req_id = uuid::Uuid::new_v4().to_string();

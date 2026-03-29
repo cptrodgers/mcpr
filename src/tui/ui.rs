@@ -60,6 +60,7 @@ fn status_style(status: ConnectionStatus) -> (Color, &'static str) {
         ConnectionStatus::Connected => (Color::Green, "●"),
         ConnectionStatus::Connecting => (Color::Yellow, "◐"),
         ConnectionStatus::Disconnected => (Color::Red, "○"),
+        ConnectionStatus::Evicted => (Color::Magenta, "⇄"),
         ConnectionStatus::Unknown => (Color::DarkGray, "?"),
     }
 }
