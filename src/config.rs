@@ -232,18 +232,15 @@ pub struct GatewayConfig {
 
 impl GatewayConfig {
     /// Resolve tunnel identity from config.
-    /// Priority: tunnel_subdomain > tunnel_token > generate new.
+    /// Token and subdomain are independent: token is for auth, subdomain is a preference.
     /// Returns (token, desired_subdomain).
     pub fn resolve_tunnel_identity(
         tunnel_subdomain: Option<String>,
         tunnel_token: Option<String>,
         generate_token: impl FnOnce() -> String,
     ) -> (String, Option<String>) {
-        if let Some(sub) = tunnel_subdomain {
-            return (sub.clone(), Some(sub));
-        }
         let token = tunnel_token.unwrap_or_else(generate_token);
-        (token, None)
+        (token, tunnel_subdomain)
     }
 
     /// Append tunnel token to the config file so the URL persists across restarts.
@@ -407,24 +404,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subdomain_takes_priority_over_token() {
+    fn subdomain_and_token_are_independent() {
         let (token, sub) = GatewayConfig::resolve_tunnel_identity(
-            Some("673977ba420f".into()),
-            Some("90c74def-8fdc-4922-8702-44bc5cabf830".into()),
+            Some("myapp".into()),
+            Some("mcpr_secret_token_123".into()),
             || panic!("should not generate"),
         );
-        assert_eq!(token, "673977ba420f");
-        assert_eq!(sub.as_deref(), Some("673977ba420f"));
+        assert_eq!(token, "mcpr_secret_token_123");
+        assert_eq!(sub.as_deref(), Some("myapp"));
     }
 
     #[test]
-    fn subdomain_without_token() {
+    fn subdomain_without_token_generates() {
         let (token, sub) =
-            GatewayConfig::resolve_tunnel_identity(Some("abcdef123456".into()), None, || {
-                panic!("should not generate")
+            GatewayConfig::resolve_tunnel_identity(Some("myapp".into()), None, || {
+                "generated-uuid".into()
             });
-        assert_eq!(token, "abcdef123456");
-        assert_eq!(sub.as_deref(), Some("abcdef123456"));
+        assert_eq!(token, "generated-uuid");
+        assert_eq!(sub.as_deref(), Some("myapp"));
     }
 
     #[test]

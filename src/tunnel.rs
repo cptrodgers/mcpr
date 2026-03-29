@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 
-use crate::relay::{RegisterAck, RegisterRequest, TunnelRequest, TunnelResponse};
+use crate::relay::{
+    RegisterAck, RegisterRequest, SubdomainOffer, SubdomainPick, TunnelRequest, TunnelResponse,
+};
 
 /// Connect to a relay server and return the assigned public URL.
 /// Spawns a background task that proxies requests from relay → localhost.
@@ -46,14 +48,27 @@ pub async fn start_tunnel_client(
         .await
         .map_err(|e| format!("Failed to send registration: {e}"))?;
 
-    // Read registration ack (or close frame on auth failure)
+    // Read registration ack, subdomain offer, or close frame
     let ack: RegisterAck = loop {
         match ws_stream.next().await {
             Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                match serde_json::from_str(&text) {
-                    Ok(ack) => break ack,
-                    Err(_) => continue,
+                // Try RegisterAck first
+                if let Ok(ack) = serde_json::from_str::<RegisterAck>(&text) {
+                    break ack;
                 }
+                // Try SubdomainOffer — relay wants us to pick a subdomain
+                if let Ok(offer) = serde_json::from_str::<SubdomainOffer>(&text) {
+                    let picked = pick_subdomain(&offer.subdomains)?;
+                    let pick = SubdomainPick { subdomain: picked };
+                    ws_sink
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            serde_json::to_string(&pick).unwrap().into(),
+                        ))
+                        .await
+                        .map_err(|e| format!("Failed to send subdomain pick: {e}"))?;
+                    continue;
+                }
+                continue;
             }
             Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
                 return Err(format!("Authentication failed: {}", frame.reason));
@@ -171,4 +186,44 @@ async fn forward_to_local(
             body: Some(base64::engine::general_purpose::STANDARD.encode(b"upstream error")),
         },
     }
+}
+
+/// Prompt the user to pick a subdomain from the allowed list.
+fn pick_subdomain(subdomains: &[String]) -> Result<String, String> {
+    if subdomains.is_empty() {
+        return Err("No subdomains available for this token".into());
+    }
+    if subdomains.len() == 1 && !subdomains[0].contains('*') {
+        return Ok(subdomains[0].clone());
+    }
+
+    eprintln!("\nAvailable subdomains:");
+    for (i, sub) in subdomains.iter().enumerate() {
+        eprintln!("  [{}] {}", i + 1, sub);
+    }
+    eprint!("Pick a subdomain (number or name): ");
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("Failed to read input: {e}"))?;
+    let input = input.trim();
+
+    // Try as number first
+    if let Ok(n) = input.parse::<usize>()
+        && n >= 1
+        && n <= subdomains.len()
+    {
+        let picked = &subdomains[n - 1];
+        if picked.contains('*') {
+            return Err(format!(
+                "'{}' is a wildcard pattern — enter a concrete subdomain name instead",
+                picked
+            ));
+        }
+        return Ok(picked.clone());
+    }
+
+    // Treat as literal subdomain name
+    Ok(input.to_string())
 }
